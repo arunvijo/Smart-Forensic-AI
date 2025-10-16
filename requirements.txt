@@ -1,0 +1,12 @@
+torch
+torchvision
+torchaudio
+transformers
+diffusers
+opencv-python
+numpy
+pandas
+streamlit
+Pillow
+scikit-learn
+tqdm
