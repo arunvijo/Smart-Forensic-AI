@@ -1,62 +1,81 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Mic, Square } from "lucide-react"; // Import Mic and Square icons
-import { useReactMediaRecorder } from "react-media-recorder"; // Import recorder hook
+import { Send, Mic, Square } from "lucide-react";
+import { useReactMediaRecorder } from "react-media-recorder";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useParams } from "react-router-dom";
 
-const N8N_WEBHOOK_URL = "https://smart-forensic-ai.app.n8n.cloud/webhook-test/mistral-chat";
-const CHAT_HISTORY_KEY = 'forensic-chat-history';
+const N8N_WEBHOOK_URL = "https://smart-forensic-ai.app.n8n.cloud/webhook/mistral-chat";
 
 interface Message {
   sender: 'user' | 'bot';
   text: string;
 }
 
-export const InputPanel = () => {
+// --- NEW: Define props to accept from Index.tsx ---
+interface InputPanelProps {
+  onGenerate: (description: string) => Promise<void>;
+  initialValue: string;
+}
+
+export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const CHAT_HISTORY_KEY = sessionId ? `forensic-chat-history-${sessionId}` : '';
+
   const [messages, setMessages] = useState<Message[]>(() => {
+    if (typeof window === 'undefined' || !sessionId) {
+      return [{ sender: 'bot', text: "Hello! Describe the subject or use the mic to speak." }];
+    }
     try {
       const saved = window.localStorage.getItem(CHAT_HISTORY_KEY);
-      return saved ? JSON.parse(saved) : [{ sender: 'bot', text: "Hello! Describe a facial feature, or use the mic to speak." }];
+      return saved ? JSON.parse(saved) : [{ sender: 'bot', text: "Hello! Describe the subject or use the mic to speak." }];
     } catch (error) {
-      console.error("Failed to parse chat history", error);
-      return [{ sender: 'bot', text: "Hello! Describe a facial feature, or use the mic to speak." }];
+      console.error("Failed to parse chat history for session:", sessionId, error);
+      return [{ sender: 'bot', text: "Hello! Describe the subject or use the mic to speak." }];
     }
   });
 
-  const [inputValue, setInputValue] = useState("");
+  const [inputValue, setInputValue] = useState(initialValue || ""); // --- NEW: Use initialValue
   const [isLoading, setIsLoading] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-  // --- Audio Recording Logic ---
-  const handleSendAudio = async (blobUrl: string) => {
-    setIsLoading(true);
-    // Add a temporary message to show audio is being processed
-    setMessages(prev => [...prev, { sender: 'user', text: "🎤 Sending audio..." }]);
+  useEffect(() => {
+    // If there's an initial value but the chat is fresh, set the input value
+    if (initialValue && messages.length <= 1) {
+      setInputValue(initialValue);
+    }
+  }, [initialValue, messages.length]);
 
+
+  const handleSendAudio = async (blobUrl: string) => {
+    if (!sessionId) {
+      toast.error("Cannot send message: Session ID is missing.");
+      return;
+    }
+    setIsLoading(true);
+    setMessages(prev => [...prev, { sender: 'user', text: "🎤 Sending audio..." }]);
     try {
       const audioBlob = await fetch(blobUrl).then(res => res.blob());
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.wav");
+      formData.append("sessionId", sessionId);
 
-      const response = await fetch(N8N_WEBHOOK_URL, {
-        method: 'POST',
-        body: formData, // The browser will set the correct Content-Type
-      });
-
+      const response = await fetch(N8N_WEBHOOK_URL, { method: 'POST', body: formData });
       if (!response.ok) throw new Error('Audio processing failed');
-      
       const botResponse: Message = await response.json();
       
-      // Replace the temporary "Sending audio..." message with the bot's response
-      setMessages(prev => [...prev.slice(0, -1), botResponse]);
-
+      // --- NEW: Trigger generation on the first audio message ---
+      if (messages.length === 1) {
+        await onGenerate(botResponse.text); // Use transcribed text for generation
+      }
+      
+      setMessages(prev => [...prev.slice(0, -1), { sender: 'user', text: botResponse.text }, botResponse]);
     } catch (error) {
       console.error("Error sending audio:", error);
       toast.error("Failed to process audio.");
-      // Replace the temporary message with an error message
-      setMessages(prev => [...prev.slice(0, -1), {sender: 'bot', text: "I couldn't process the audio. Please try again."}]);
+      setMessages(prev => [...prev.slice(0, -1), {sender: 'bot', text: "I couldn't process the audio."}]);
     } finally {
       setIsLoading(false);
     }
@@ -64,13 +83,14 @@ export const InputPanel = () => {
 
   const { status, startRecording, stopRecording } = useReactMediaRecorder({ 
     audio: true,
-    onStop: handleSendAudio // This function is called when recording stops
+    onStop: handleSendAudio
   });
-  // --- End of Audio Logic ---
 
   useEffect(() => {
-    window.localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages));
-  }, [messages]);
+    if (typeof window !== 'undefined' && sessionId) {
+      window.localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages));
+    }
+  }, [messages, CHAT_HISTORY_KEY, sessionId]);
 
   useEffect(() => {
     const viewport = scrollAreaRef.current?.querySelector('div[data-radix-scroll-area-viewport]');
@@ -78,7 +98,13 @@ export const InputPanel = () => {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim()) return;
+    if (!sessionId || !inputValue.trim()) return;
+
+    // --- NEW: Trigger generation on the first text message ---
+    if (messages.length === 1) {
+      await onGenerate(inputValue);
+    }
+
     const userMessage: Message = { sender: 'user', text: inputValue };
     setMessages(prev => [...prev, userMessage]);
     const currentInputValue = inputValue;
@@ -89,7 +115,7 @@ export const InputPanel = () => {
       const response = await fetch(N8N_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: currentInputValue, conversation: messages }),
+        body: JSON.stringify({ message: currentInputValue, conversation: messages, sessionId }),
       });
       if (!response.ok) throw new Error('Network response was not ok');
       const botResponse: Message = await response.json();
@@ -97,18 +123,25 @@ export const InputPanel = () => {
     } catch (error) {
       console.error("Error communicating with n8n workflow:", error);
       toast.error("Sorry, I couldn't connect to the assistant.");
-      setMessages(prev => [...prev, {sender: 'bot', text: "I'm having some trouble connecting. Please try again later."}]);
+      setMessages(prev => [...prev, {sender: 'bot', text: "I'm having some trouble connecting."}]);
     } finally {
       setIsLoading(false);
     }
   };
+
+  if (!sessionId) {
+    return (
+      <div className="panel p-6 flex flex-col h-screen items-center justify-center bg-muted/30">
+        <p className="text-muted-foreground">Loading session...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="panel p-6 flex flex-col h-screen">
       <h2 className="text-xl font-semibold mb-4">Forensic Assistant</h2>
       
       <ScrollArea className="flex-1 mb-4 border rounded-lg bg-muted/30 p-4" ref={scrollAreaRef}>
-        {/* --- FIX: This section displays the chat messages --- */}
         <div className="space-y-4">
           {messages.map((msg, index) => (
             <div
@@ -151,7 +184,6 @@ export const InputPanel = () => {
         <Button onClick={handleSendMessage} disabled={isLoading || status === 'recording'} aria-label="Send Message">
           <Send className="h-4 w-4" />
         </Button>
-        {/* --- Microphone Button --- */}
         <Button 
           onClick={status === 'recording' ? stopRecording : startRecording} 
           disabled={isLoading}

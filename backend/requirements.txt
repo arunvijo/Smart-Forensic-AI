@@ -13,3 +13,5 @@ streamlit
 Pillow
 scikit-learn
 tqdm
+flask-cors
+gunicorn
