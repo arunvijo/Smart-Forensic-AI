@@ -21,10 +21,11 @@ export const InputPanel = ({
     setIsRecording(!isRecording);
     if (!isRecording) {
       toast.info("Voice recording started");
-      // Mock recording simulation
+      // 🎙️ Mock voice recording simulation (replace with real speech-to-text later)
       setTimeout(() => {
         setIsRecording(false);
-        setDescription("A man in his late 20s, with a long face and tired-looking eyes...");
+        const simulatedText = "A man in his late 20s, with a long face and tired-looking eyes...";
+        setDescription(simulatedText);
         toast.success("Recording complete");
       }, 2000);
     } else {
@@ -32,12 +33,33 @@ export const InputPanel = ({
     }
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!description.trim()) {
       toast.error("Please provide a description");
       return;
     }
-    onGenerate(description);
+
+    try {
+      toast.info("Sending description to backend...");
+
+      // 🧠 Send description to Flask backend
+      const response = await fetch("http://127.0.0.1:5000/process_speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+
+      if (!response.ok) throw new Error("Failed to connect to backend");
+
+      const data = await response.json();
+      console.log("Backend Response:", data);
+
+      toast.success("Description processed successfully!");
+      onGenerate(description); // call existing handler
+    } catch (error) {
+      console.error(error);
+      toast.error("Error communicating with backend");
+    }
   };
 
   return (
