@@ -1,3 +1,6 @@
+Flask
+Flask-Cors
+openai-whisper
 torch
 torchvision
 torchaudio

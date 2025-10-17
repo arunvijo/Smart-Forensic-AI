@@ -1,72 +1,104 @@
-import { useState } from "react";
-import { Mic, MicOff, Type } from "lucide-react";
+import { useState, useRef } from "react";
+import { Mic, MicOff, Type, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 type InputMode = "text" | "voice";
 
-export const InputPanel = ({ 
-  onGenerate, 
-  initialValue = '' 
-}: { 
+export const InputPanel = ({
+  onGenerate,
+  initialValue = ''
+}: {
   onGenerate: (description: string) => void;
   initialValue?: string;
 }) => {
   const [inputMode, setInputMode] = useState<InputMode>("text");
   const [description, setDescription] = useState(initialValue);
   const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
-  const handleVoiceToggle = () => {
-    setIsRecording(!isRecording);
-    if (!isRecording) {
-      toast.info("Voice recording started");
-      // 🎙️ Mock voice recording simulation (replace with real speech-to-text later)
-      setTimeout(() => {
-        setIsRecording(false);
-        const simulatedText = "A man in his late 20s, with a long face and tired-looking eyes...";
-        setDescription(simulatedText);
-        toast.success("Recording complete");
-      }, 2000);
+  // Function to handle starting and stopping the recording
+  const handleVoiceToggle = async () => {
+    if (isRecording) {
+      // Stop recording
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stop();
+      }
+      setIsRecording(false);
+      toast.info("Recording stopped. Processing audio...");
     } else {
-      toast.info("Recording stopped");
+      // Start recording
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = mediaRecorder;
+        audioChunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          audioChunksRef.current.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
+          await sendAudioToBackend(audioBlob);
+          // Stop the microphone track
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        setIsRecording(true);
+        toast.info("Voice recording started...");
+      } catch (error) {
+        console.error("Error accessing microphone:", error);
+        toast.error("Could not access microphone. Please check permissions.");
+      }
     }
   };
 
+  // Function to send the recorded audio to the backend
+  const sendAudioToBackend = async (audioBlob: Blob) => {
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "recording.wav");
+
+    try {
+      toast.loading("Transcribing audio...");
+      const response = await fetch("http://127.0.0.1:5000/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to transcribe audio");
+      }
+
+      const data = await response.json();
+      if (data.status === 'success' && data.transcription) {
+        setDescription(data.transcription);
+        toast.success("Transcription complete!");
+      } else {
+        throw new Error(data.message || "Unknown error during transcription");
+      }
+    } catch (error) {
+      console.error("Error sending audio to backend:", error);
+      toast.error("Failed to process audio.");
+    }
+  };
+
+  // Function to send the final description (from text or voice)
   const handleGenerate = async () => {
     if (!description.trim()) {
       toast.error("Please provide a description");
       return;
     }
-
-    try {
-      toast.info("Sending description to backend...");
-
-      // 🧠 Send description to Flask backend
-      const response = await fetch("http://127.0.0.1:5000/process_speech", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description }),
-      });
-
-      if (!response.ok) throw new Error("Failed to connect to backend");
-
-      const data = await response.json();
-      console.log("Backend Response:", data);
-
-      toast.success("Description processed successfully!");
-      onGenerate(description); // call existing handler
-    } catch (error) {
-      console.error(error);
-      toast.error("Error communicating with backend");
-    }
+    onGenerate(description);
   };
 
   return (
     <div className="panel p-6 flex flex-col gap-6 h-full">
       <div>
         <h2 className="text-xl font-semibold mb-4">Suspect Description</h2>
-        
         <div className="flex gap-2 mb-4">
           <Button
             variant={inputMode === "text" ? "default" : "secondary"}
@@ -115,6 +147,7 @@ export const InputPanel = ({
       </div>
 
       <Button onClick={handleGenerate} size="lg" className="w-full">
+        <Send className="mr-2 h-4 w-4" />
         Generate Initial Sketch
       </Button>
     </div>
