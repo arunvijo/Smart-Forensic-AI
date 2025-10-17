@@ -1,155 +1,167 @@
-import { useState, useRef } from "react";
-import { Mic, MicOff, Type, Send } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Send, Mic, Square } from "lucide-react"; // Import Mic and Square icons
+import { useReactMediaRecorder } from "react-media-recorder"; // Import recorder hook
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
-type InputMode = "text" | "voice";
+const N8N_WEBHOOK_URL = "https://smart-forensic-ai.app.n8n.cloud/webhook-test/mistral-chat";
+const CHAT_HISTORY_KEY = 'forensic-chat-history';
 
-export const InputPanel = ({
-  onGenerate,
-  initialValue = ''
-}: {
-  onGenerate: (description: string) => void;
-  initialValue?: string;
-}) => {
-  const [inputMode, setInputMode] = useState<InputMode>("text");
-  const [description, setDescription] = useState(initialValue);
-  const [isRecording, setIsRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+interface Message {
+  sender: 'user' | 'bot';
+  text: string;
+}
 
-  // Function to handle starting and stopping the recording
-  const handleVoiceToggle = async () => {
-    if (isRecording) {
-      // Stop recording
-      if (mediaRecorderRef.current) {
-        mediaRecorderRef.current.stop();
-      }
-      setIsRecording(false);
-      toast.info("Recording stopped. Processing audio...");
-    } else {
-      // Start recording
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaRecorder = new MediaRecorder(stream);
-        mediaRecorderRef.current = mediaRecorder;
-        audioChunksRef.current = [];
-
-        mediaRecorder.ondataavailable = (event) => {
-          audioChunksRef.current.push(event.data);
-        };
-
-        mediaRecorder.onstop = async () => {
-          const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
-          await sendAudioToBackend(audioBlob);
-          // Stop the microphone track
-          stream.getTracks().forEach(track => track.stop());
-        };
-
-        mediaRecorder.start();
-        setIsRecording(true);
-        toast.info("Voice recording started...");
-      } catch (error) {
-        console.error("Error accessing microphone:", error);
-        toast.error("Could not access microphone. Please check permissions.");
-      }
+export const InputPanel = () => {
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const saved = window.localStorage.getItem(CHAT_HISTORY_KEY);
+      return saved ? JSON.parse(saved) : [{ sender: 'bot', text: "Hello! Describe a facial feature, or use the mic to speak." }];
+    } catch (error) {
+      console.error("Failed to parse chat history", error);
+      return [{ sender: 'bot', text: "Hello! Describe a facial feature, or use the mic to speak." }];
     }
-  };
+  });
 
-  // Function to send the recorded audio to the backend
-  const sendAudioToBackend = async (audioBlob: Blob) => {
-    const formData = new FormData();
-    formData.append("audio", audioBlob, "recording.wav");
+  const [inputValue, setInputValue] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // --- Audio Recording Logic ---
+  const handleSendAudio = async (blobUrl: string) => {
+    setIsLoading(true);
+    // Add a temporary message to show audio is being processed
+    setMessages(prev => [...prev, { sender: 'user', text: "🎤 Sending audio..." }]);
 
     try {
-      toast.loading("Transcribing audio...");
-      const response = await fetch("http://127.0.0.1:5000/transcribe", {
-        method: "POST",
-        body: formData,
+      const audioBlob = await fetch(blobUrl).then(res => res.blob());
+      const formData = new FormData();
+      formData.append("audio", audioBlob, "recording.wav");
+
+      const response = await fetch(N8N_WEBHOOK_URL, {
+        method: 'POST',
+        body: formData, // The browser will set the correct Content-Type
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to transcribe audio");
-      }
+      if (!response.ok) throw new Error('Audio processing failed');
+      
+      const botResponse: Message = await response.json();
+      
+      // Replace the temporary "Sending audio..." message with the bot's response
+      setMessages(prev => [...prev.slice(0, -1), botResponse]);
 
-      const data = await response.json();
-      if (data.status === 'success' && data.transcription) {
-        setDescription(data.transcription);
-        toast.success("Transcription complete!");
-      } else {
-        throw new Error(data.message || "Unknown error during transcription");
-      }
     } catch (error) {
-      console.error("Error sending audio to backend:", error);
+      console.error("Error sending audio:", error);
       toast.error("Failed to process audio.");
+      // Replace the temporary message with an error message
+      setMessages(prev => [...prev.slice(0, -1), {sender: 'bot', text: "I couldn't process the audio. Please try again."}]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Function to send the final description (from text or voice)
-  const handleGenerate = async () => {
-    if (!description.trim()) {
-      toast.error("Please provide a description");
-      return;
+  const { status, startRecording, stopRecording } = useReactMediaRecorder({ 
+    audio: true,
+    onStop: handleSendAudio // This function is called when recording stops
+  });
+  // --- End of Audio Logic ---
+
+  useEffect(() => {
+    window.localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages));
+  }, [messages]);
+
+  useEffect(() => {
+    const viewport = scrollAreaRef.current?.querySelector('div[data-radix-scroll-area-viewport]');
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  }, [messages]);
+
+  const handleSendMessage = async () => {
+    if (!inputValue.trim()) return;
+    const userMessage: Message = { sender: 'user', text: inputValue };
+    setMessages(prev => [...prev, userMessage]);
+    const currentInputValue = inputValue;
+    setInputValue("");
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(N8N_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: currentInputValue, conversation: messages }),
+      });
+      if (!response.ok) throw new Error('Network response was not ok');
+      const botResponse: Message = await response.json();
+      setMessages(prev => [...prev, botResponse]);
+    } catch (error) {
+      console.error("Error communicating with n8n workflow:", error);
+      toast.error("Sorry, I couldn't connect to the assistant.");
+      setMessages(prev => [...prev, {sender: 'bot', text: "I'm having some trouble connecting. Please try again later."}]);
+    } finally {
+      setIsLoading(false);
     }
-    onGenerate(description);
   };
 
   return (
-    <div className="panel p-6 flex flex-col gap-6 h-full">
-      <div>
-        <h2 className="text-xl font-semibold mb-4">Suspect Description</h2>
-        <div className="flex gap-2 mb-4">
-          <Button
-            variant={inputMode === "text" ? "default" : "secondary"}
-            onClick={() => setInputMode("text")}
-            className="flex-1"
-          >
-            <Type className="mr-2 h-4 w-4" />
-            Text Input
-          </Button>
-          <Button
-            variant={inputMode === "voice" ? "default" : "secondary"}
-            onClick={() => setInputMode("voice")}
-            className="flex-1"
-          >
-            <Mic className="mr-2 h-4 w-4" />
-            Voice Input
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex-1">
-        {inputMode === "text" ? (
-          <Textarea
-            placeholder="Enter a detailed description. e.g., 'A man in his late 20s, with a long face and tired-looking eyes...'"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="h-full min-h-[200px] resize-none bg-muted/30"
-          />
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full min-h-[200px] bg-muted/30 rounded-lg border-2 border-dashed border-border">
-            <button
-              onClick={handleVoiceToggle}
-              className="p-8 rounded-full bg-primary/10 hover:bg-primary/20 transition-colors"
+    <div className="panel p-6 flex flex-col h-screen">
+      <h2 className="text-xl font-semibold mb-4">Forensic Assistant</h2>
+      
+      <ScrollArea className="flex-1 mb-4 border rounded-lg bg-muted/30 p-4" ref={scrollAreaRef}>
+        {/* --- FIX: This section displays the chat messages --- */}
+        <div className="space-y-4">
+          {messages.map((msg, index) => (
+            <div
+              key={index}
+              className={`flex items-end gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              {isRecording ? (
-                <MicOff className="h-16 w-16 text-destructive animate-pulse" />
-              ) : (
-                <Mic className="h-16 w-16 text-primary" />
-              )}
-            </button>
-            <p className="mt-4 text-sm text-muted-foreground">
-              {isRecording ? "Recording... Click to stop" : "Click the microphone to start recording"}
-            </p>
-          </div>
-        )}
-      </div>
+              <div
+                className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
+                  msg.sender === 'user'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-secondary text-secondary-foreground'
+                }`}
+              >
+                <p className="text-sm" style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
+              </div>
+            </div>
+          ))}
+          {isLoading && (
+            <div className="flex justify-start">
+                 <div className="max-w-xs md:max-w-md rounded-lg px-4 py-2 bg-secondary text-secondary-foreground">
+                    <div className="flex items-center space-x-2">
+                        <span className="w-2 h-2 bg-current rounded-full animate-pulse delay-75"></span>
+                        <span className="w-2 h-2 bg-current rounded-full animate-pulse delay-150"></span>
+                        <span className="w-2 h-2 bg-current rounded-full animate-pulse delay-300"></span>
+                    </div>
+                </div>
+            </div>
+          )}
+        </div>
+      </ScrollArea>
 
-      <Button onClick={handleGenerate} size="lg" className="w-full">
-        <Send className="mr-2 h-4 w-4" />
-        Generate Initial Sketch
-      </Button>
+      <div className="flex gap-2">
+        <Input
+          placeholder="Describe a facial feature..."
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleSendMessage()}
+          disabled={isLoading || status === 'recording'}
+        />
+        <Button onClick={handleSendMessage} disabled={isLoading || status === 'recording'} aria-label="Send Message">
+          <Send className="h-4 w-4" />
+        </Button>
+        {/* --- Microphone Button --- */}
+        <Button 
+          onClick={status === 'recording' ? stopRecording : startRecording} 
+          disabled={isLoading}
+          variant={status === 'recording' ? 'destructive' : 'outline'}
+          aria-label={status === 'recording' ? 'Stop Recording' : 'Start Recording'}
+        >
+          {status === 'recording' ? <Square className="h-4 w-4 animate-pulse" /> : <Mic className="h-4 w-4" />}
+        </Button>
+      </div>
     </div>
   );
 };
+

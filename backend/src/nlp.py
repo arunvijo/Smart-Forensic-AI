@@ -1,70 +1,67 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import whisper
-import tempfile
 import os
+# import whisper # Uncomment for real implementation
 
 app = Flask(__name__)
-CORS(app)  # Allow frontend requests
+CORS(app)
 
-# Load the Whisper model once when the server starts
-try:
-    model = whisper.load_model("base")
-    print("✅ Whisper model loaded successfully.")
-except Exception as e:
-    print(f"🔥 Error loading Whisper model: {e}")
-    model = None
+# --- WHISPER MODEL LOADING (REAL IMPLEMENTATION) ---
+# print("Loading Whisper model...")
+# whisper_model = whisper.load_model("base")
+# print("Whisper model loaded.")
+# ----------------------------------------------------
 
+# --- NEW: /transcribe ENDPOINT ---
 @app.route("/transcribe", methods=["POST"])
 def transcribe_audio():
-    if not model:
-        return jsonify({"status": "error", "message": "Whisper model not loaded"}), 500
+    """
+    Receives an audio file, transcribes it, and returns the text.
+    """
+    if 'audio' not in request.files:
+        return jsonify({"status": "error", "message": "No audio file in request"}), 400
 
-    if "audio" not in request.files:
-        return jsonify({"status": "error", "message": "No audio file found"}), 400
+    audio_file = request.files['audio']
+    print(f"\n🎤--- Received audio file: {audio_file.filename} ---🎤")
 
-    audio_file = request.files["audio"]
-    
-    # Create a temporary file and immediately close it so it can be used by other processes
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    audio_file.save(temp_file.name)
-    temp_file.close() # <-- This is the key change to release the file lock
+    # --- SIMULATED TRANSCRIPTION FOR 30% DEMO ---
+    transcribed_text = "The subject had a long, narrow face with a prominent chin."
+    print(f"✅--- Simulated Transcription: '{transcribed_text}' ---✅\n")
+    # ---------------------------------------------
 
-    try:
-        # Transcribe the audio file using its path
-        result = model.transcribe(temp_file.name)
-        transcribed_text = result["text"]
-
-        print("\n🎤--- Transcription Result ---🎤")
-        print(transcribed_text)
-        print("-------------------------------\n")
-
-        # Return the transcribed text to the frontend
-        return jsonify({"status": "success", "transcription": transcribed_text})
-    except Exception as e:
-        print(f"🔥 Error during transcription: {e}")
-        return jsonify({"status": "error", "message": "Failed to transcribe audio"}), 500
-    finally:
-        # Clean up the temporary file
-        os.remove(temp_file.name)
-
-
-@app.route("/process_speech", methods=["POST"])
-def process_speech():
-    data = request.get_json()
-    description = data.get("description")
-
-    if not description:
-        return jsonify({"status": "error", "message": "No description provided"}), 400
-
-    print("\n✅--- Description Received from Frontend ---✅")
-    print(description)
-    print("---------------------------------------------\n")
+    # --- REAL WHISPER IMPLEMENTATION ---
+    # try:
+    #     # Save the file temporarily to transcribe it
+    #     filepath = os.path.join("/tmp", audio_file.filename)
+    #     audio_file.save(filepath)
+    #     result = whisper_model.transcribe(filepath)
+    #     transcribed_text = result['text']
+    #     os.remove(filepath) # Clean up the file
+    #     print(f"✅--- Transcribed Text: '{transcribed_text}' ---✅\n")
+    # except Exception as e:
+    #     print(f"Error during transcription: {e}")
+    #     return jsonify({"status": "error", "message": "Failed to transcribe audio"}), 500
+    # -----------------------------------
 
     return jsonify({
         "status": "success",
-        "message": "Description received and processed successfully!",
-        "received_description": description
+        "transcription": transcribed_text
+    })
+# --- END OF NEW ENDPOINT ---
+
+@app.route("/generate-vector", methods=["POST"])
+def generate_vector():
+    data = request.get_json()
+    description = data.get("description")
+    if not description:
+        return jsonify({"status": "error", "message": "No description provided"}), 400
+    print(f"\n⚡️--- Received description for vectorization: '{description}' ---⚡️")
+    simulated_vector = [0.1, 0.5, -0.2] + [round(num, 4) for num in (os.urandom(10))]
+    print(f"✅--- Generated Feature Vector (first 5 elements): {simulated_vector[:5]}... ---✅\n")
+    return jsonify({
+        "status": "success",
+        "message": f"Successfully generated vector for: {description}",
+        "feature_vector": simulated_vector
     })
 
 if __name__ == "__main__":
