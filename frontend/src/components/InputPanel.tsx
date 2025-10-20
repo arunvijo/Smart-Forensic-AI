@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useParams } from "react-router-dom";
 
-const N8N_WEBHOOK_URL = "https://smart-forensic-ai.app.n8n.cloud/webhook/mistral-chat";
+const N8N_WEBHOOK_URL = "https://smart-forensic-ai.onrender.com/mistral-chat";
 
 interface Message {
   sender: "user" | "bot";
