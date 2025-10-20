@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 import json
 import requests
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
@@ -10,54 +11,152 @@ CORS(app)
 # =========================
 # Config / Constants
 # =========================
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")  # set on Render dashboard
+# !!! For prod, set this in environment (Render/locally) and DO NOT hardcode !!!
+MISTRAL_API_KEY = "vHeNjpH8Bq9h6WOp1QIkOKoACs1WB9Qu"  # set on Render dashboard
 MISTRAL_CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
-# Choose a model you have access to; small is cheap/fast. You can switch to "mistral-large-latest".
-MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+MISTRAL_MODEL = "mistral-tiny-latest"  # Switched from small to tiny for better availability
 
-# System prompt copied from your n8n LLM Chain (gatekeeper that ALWAYS emits JSON)
+
+# The conversational order of parts we want to collect
+PART_ORDER = ["face", "eyes", "nose", "mouth", "ears", "hair"]
+
+# Minimal required fields per part (keep it simple; you can expand anytime)
+REQUIRED_FIELDS = {
+    "face": ["shape"],          # e.g., round / oval / long / heart / square
+    "eyes": ["shape", "color"], # e.g., almond/round/hooded; brown/blue/black
+    "nose": ["type"],           # e.g., straight/hooked/broad/narrow
+    "mouth": ["type"],          # e.g., thin/full/bowed; you can split later
+    "ears": ["type"],           # e.g., protruding/average/attached lobes
+    "hair": ["style", "color"], # e.g., short/long/curly/straight; black/brown
+}
+
+# In-memory session store (OK for one-process dev; use Redis for production scale)
+SESSIONS = {}  # sessionId -> {"stage_index": int, "collected": dict, "created_at": str}
+
+# =========================
+# LLM Prompts
+# =========================
+# Gatekeeper now extracts across *all categories*, not just "is_feature".
+# It must ALWAYS return strict JSON so we can trust it.
 LLM_SYSTEM_PROMPT = (
-    "You are a specialized AI assistant for generating forensic sketches. "
-    "Your primary goal is to determine if the user's message describes a specific facial feature. "
-    "You must ALWAYS respond with a JSON object.\n\n"
-    "The JSON object should have the following structure:\n"
+    "You are a careful information extractor for a forensic sketch assistant. "
+    "User messages may be casual and out of order. Extract any facial attributes you can find "
+    "and file them under these categories: face, eyes, nose, mouth, ears, hair.\n\n"
+    "ALWAYS return ONLY a JSON object with this schema:\n"
     "{\n"
-    '  "is_feature": boolean,\n'
-    '  "feature_description": "string or null",\n'
-    '  "reply": "string"\n'
+    '  \"extracted\": {\n'
+    '    \"face\": {\"shape\": \"string|null\", \"extra\": \"string|null\"},\n'
+    '    \"eyes\": {\"shape\": \"string|null\", \"color\": \"string|null\", \"extra\": \"string|null\"},\n'
+    '    \"nose\": {\"type\": \"string|null\", \"extra\": \"string|null\"},\n'
+    '    \"mouth\": {\"type\": \"string|null\", \"extra\": \"string|null\"},\n'
+    '    \"ears\": {\"type\": \"string|null\", \"extra\": \"string|null\"},\n'
+    '    \"hair\": {\"style\": \"string|null\", \"color\": \"string|null\", \"extra\": \"string|null\"}\n'
+    "  },\n"
+    '  \"small_talk_reply\": \"string\",   // a natural short reply acknowledging the user\n'
+    '  \"confidence\": 0.0                 // 0 to 1 overall extraction confidence\n'
     "}\n\n"
-    "- If the user's message is a clear description of a facial feature (like 'he had a large, crooked nose' or 'thin eyebrows'), "
-    'set "is_feature" to true, put the extracted description in "feature_description", and create a short confirmation message for "reply".\n'
-    "- If the user's message is a greeting, a question, or anything else that is NOT a feature description, "
-    'set "is_feature" to false, set "feature_description" to null, and create a helpful, conversational response for "reply".'
+    "Rules:\n"
+    "- If nothing is mentioned for a field, put null.\n"
+    "- Be concise. Do not infer wildly; prefer null over guessing.\n"
+    "- The 'small_talk_reply' should sound friendly and confirm what you understood.\n"
 )
+
+# Next-question helper prompt (when we need to ask user something specific)
+# We'll synthesize this ourselves from REQUIRED_FIELDS and what's missing, but we keep LLM free.
+NEXT_QUESTION_TEMPLATES = {
+    "face":  "Could you describe the overall face shape? For example: round, oval, long, heart, or square.",
+    "eyes":  "How do the eyes look? You can mention a shape (almond/round/hooded) and color (brown/black/blue/green).",
+    "nose":  "How would you describe the nose? For example: straight, hooked, broad, narrow.",
+    "mouth": "How would you describe the mouth or lips? For example: thin, full, bowed.",
+    "ears":  "Anything notable about the ears? For example: protruding, average, attached lobes.",
+    "hair":  "Please describe hair style and color. For example: short/long/curly/straight and black/brown/blonde.",
+}
 
 # =========================
 # Utilities
 # =========================
 
-def call_mistral_gatekeeper(conversation, latest_text):
-    """
-    Replicates your n8n LLM Chain: builds a single 'user' prompt with:
-    - Conversation History (sender: text per line)
-    - Latest Message (user: <text>)
+def get_or_create_session(session_id: str):
+    if not session_id:
+        session_id = "default"  # fallback for dev
+    if session_id not in SESSIONS:
+        SESSIONS[session_id] = {
+            "stage_index": 0,
+            "collected": {p: {} for p in PART_ORDER},
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
+    return session_id, SESSIONS[session_id]
 
-    Expects Mistral to return a SINGLE assistant message whose content is a JSON string.
+def current_part(session):
+    return PART_ORDER[session["stage_index"]]
+
+def part_complete(part_name: str, data: dict):
+    needed = REQUIRED_FIELDS.get(part_name, [])
+    # A part is complete if all required fields exist and are non-empty
+    return all((field in data and data[field]) for field in needed)
+
+def advance_if_ready(session):
+    # If current part is complete, move to the next
+    while session["stage_index"] < len(PART_ORDER):
+        p = current_part(session)
+        if part_complete(p, session["collected"].get(p, {})):
+            session["stage_index"] += 1
+        else:
+            break
+
+def summarize_collected(session):
+    """Simple human-readable summary for debugging/UX if needed."""
+    lines = []
+    for p in PART_ORDER:
+        vals = session["collected"].get(p, {})
+        flat = ", ".join(f"{k}: {v}" for k, v in vals.items() if v)
+        lines.append(f"{p}: {flat if flat else '(pending)'}")
+    return " | ".join(lines)
+
+def merge_extraction(session, extracted: dict):
+    """Merge LLM extracted fields into session store, without overwriting filled fields with null."""
+    collected = session["collected"]
+    for part, fields in (extracted or {}).items():
+        if part not in collected:
+            continue
+        if not isinstance(fields, dict):
+            continue
+        # store only non-null values
+        for key, val in fields.items():
+            if val not in (None, "", "null"):
+                collected[part][key] = val
+
+def next_missing_prompt(session):
+    if session["stage_index"] >= len(PART_ORDER):
+        return None  # everything done
+    p = current_part(session)
+    # check what is missing to tailor the prompt
+    missing = [f for f in REQUIRED_FIELDS[p] if not session["collected"][p].get(f)]
+    base = NEXT_QUESTION_TEMPLATES[p]
+    if missing:
+        # Emphasize the first missing field to keep it simple for laypersons
+        return base
+    return base
+
+def call_mistral_extractor(conversation, latest_text):
     """
-    # Format the prompt like your n8n HumanMessagePromptTemplate
+    Calls Mistral to *extract* attributes (not to decide feature vs not).
+    Returns dict with keys: extracted, small_talk_reply, confidence
+    """
+    # Build a compact history string (optional; we mainly need latest_text)
     hist_lines = []
     for msg in (conversation or []):
-        # expect items like {"sender": "user"|"bot", "text": "..."}
         sender = msg.get("sender", "")
         text = msg.get("text", "")
+        # keep it short to save tokens
         hist_lines.append(f"{sender}: {text}")
-    history_block = "Conversation History:\n" + "\n".join(hist_lines)
+    history_block = "Conversation so far:\n" + "\n".join(hist_lines[-10:])  # last 10 lines max
 
-    latest_block = f"\n\nLatest Message:\nuser: {latest_text}"
+    user_block = f"\n\nNew message:\nuser: {latest_text}"
 
     messages = [
         {"role": "system", "content": LLM_SYSTEM_PROMPT},
-        {"role": "user", "content": history_block + latest_block}
+        {"role": "user", "content": history_block + user_block}
     ]
 
     headers = {
@@ -76,66 +175,53 @@ def call_mistral_gatekeeper(conversation, latest_text):
         raise RuntimeError(f"Mistral API error: {resp.status_code} {resp.text}")
 
     data = resp.json()
-    content = data["choices"][0]["message"]["content"]  # string
-    # MUST be JSON per the prompt; fall back defensively
+    content = data["choices"][0]["message"]["content"]  # should be JSON
     try:
         parsed = json.loads(content)
     except Exception:
-        # Try to extract JSON substring if the model wrapped it
+        # Try to recover JSON
         start = content.find("{")
         end = content.rfind("}")
         if start != -1 and end != -1 and end > start:
             parsed = json.loads(content[start:end+1])
         else:
-            # worst case: return a non-feature reply
-            parsed = {"is_feature": False, "feature_description": None, "reply": content}
+            # fallback empty extraction
+            parsed = {
+                "extracted": {k: {} for k in PART_ORDER},
+                "small_talk_reply": "Okay.",
+                "confidence": 0.0,
+            }
 
-    # Ensure required fields exist
-    parsed.setdefault("is_feature", False)
-    parsed.setdefault("feature_description", None)
-    parsed.setdefault("reply", "Okay.")
+    # ensure required keys exist
+    parsed.setdefault("extracted", {k: {} for k in PART_ORDER})
+    parsed.setdefault("small_talk_reply", "Okay.")
+    parsed.setdefault("confidence", 0.0)
     return parsed
 
-
 def generate_feature_vector(description: str):
-    """
-    Same spirit as your /generate-vector endpoint (quick demo vector).
-    """
+    """ Demo numeric vector (placeholder) """
     if not description:
         return []
-    # Not meaningful math—just a deterministic-ish demo vector
-    # You can replace with a real embedder later.
     base = [0.1, 0.5, -0.2]
     tail = [b / 255.0 for b in os.urandom(16)]
     return base + tail
 
-
 # =========================
-# Existing endpoints
+# Existing endpoints (kept)
 # =========================
-
 @app.route("/transcribe", methods=["POST"])
 def transcribe_audio():
-    """
-    Receives an audio file, transcribes it, and returns the text.
-    For demo: returns a fixed line. Swap with Whisper when ready.
-    """
     if 'audio' not in request.files:
         return jsonify({"status": "error", "message": "No audio file in request"}), 400
 
     audio_file = request.files['audio']
-    print(f"\n🎤--- Received audio file: {audio_file.filename} ---🎤")
+    print(f"\n🎤 Received audio file: {audio_file.filename}")
 
-    # --- SIMULATED TRANSCRIPTION FOR 30% DEMO ---
+    # Simulated Whisper
     transcribed_text = "The subject had a long, narrow face with a prominent chin."
-    print(f"✅--- Simulated Transcription: '{transcribed_text}' ---✅\n")
+    print(f"✅ Simulated Transcription: '{transcribed_text}'\n")
 
-    # (Real Whisper code can go here)
-    return jsonify({
-        "status": "success",
-        "transcription": transcribed_text
-    })
-
+    return jsonify({"status": "success", "transcription": transcribed_text})
 
 @app.route("/generate-vector", methods=["POST"])
 def generate_vector():
@@ -143,83 +229,121 @@ def generate_vector():
     description = data.get("description")
     if not description:
         return jsonify({"status": "error", "message": "No description provided"}), 400
-
-    print(f"\n⚡️--- Received description for vectorization: '{description}' ---⚡️")
-    simulated_vector = generate_feature_vector(description)
-    print(f"✅--- Generated Feature Vector (first 5 elements): {simulated_vector[:5]} ---✅\n")
-    return jsonify({
-        "status": "success",
-        "message": f"Successfully generated vector for: {description}",
-        "feature_vector": simulated_vector
-    })
-
+    print(f"\n⚡ Vectorization request: '{description}'")
+    vec = generate_feature_vector(description)
+    print(f"✅ Feature Vector (len={len(vec)}), first5={vec[:5]}\n")
+    return jsonify({"status": "success", "message": f"Vector for: {description}", "feature_vector": vec})
 
 # =========================
-# NEW: Unified webhook (n8n replacement)
+# Session helpers (optional)
+# =========================
+@app.route("/session/reset", methods=["POST"])
+def reset_session():
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("sessionId") or "default"
+    if session_id in SESSIONS:
+        del SESSIONS[session_id]
+    return jsonify({"status": "success", "message": f"Session {session_id} reset."})
+
+# =========================
+# NEW: Conversational webhook
 # =========================
 @app.route("/mistral-chat", methods=["POST"])
 def mistral_chat():
     """
-    Unifies your Webhook Trigger + Check Input Type + Transcribe + LLM Chain + Check Feature + Call NLP Service
+    Conversational collector:
+    - Accepts JSON ({message, conversation, sessionId}) or multipart with audio.
+    - Extracts any mentioned attributes (even out-of-turn) and stores them under the correct part.
+    - Prompts the user for the NEXT missing detail in fixed order: face -> eyes -> nose -> mouth -> ears -> hair.
+    - Optionally generates per-part vectors once a part becomes complete (placeholder).
+    - Returns {sender:'bot', text: '<next question or final summary>'}.
     """
 
-    # 1) Determine input type (JSON chat vs multipart audio), like your n8n "Check Input Type"
-    content_type = request.headers.get("Content-Type", "")
+    # Determine input type
+    content_type = (request.headers.get("Content-Type") or "").lower()
     is_multipart = "multipart/form-data" in content_type
 
     conversation = []
     latest_text = ""
+    session_id = None
 
     if is_multipart and "audio" in request.files:
-        # 2a) Audio path -> call our /transcribe (same as n8n's HTTP Request 'Transcribe Audio')
-        audio = request.files["audio"]
-        # You can call the transcribe function directly; here we reuse the route logic
-        # For simplicity, emulate by setting latest_text to the simulated transcript:
-        transcribed_text = "The subject had a long, narrow face with a prominent chin."
-        latest_text = transcribed_text
-        # Allow sessionId passthrough if needed
-        _ = request.form.get("sessionId")
-        # Conversation not passed in multipart in your frontend; keep empty
+        # Audio path
+        session_id = request.form.get("sessionId") or "default"
+        # Simulated transcription (you can call /transcribe here if you want strict reuse)
+        latest_text = "The subject had a long, narrow face with a prominent chin."
         print(f"📝 Using transcribed text as latest message: {latest_text}")
-
     else:
-        # 2b) JSON path -> same schema your frontend sends to n8n
+        # JSON path
         data = request.get_json(silent=True) or {}
-        latest_text = data.get("message", "") or ""
+        latest_text = (data.get("message") or "").strip()
         conversation = data.get("conversation", []) or []
-        # Optional: accept transcription result if you later post it here
+        session_id = data.get("sessionId") or "default"
+        # Accept pre-transcribed text if provided
         if not latest_text and isinstance(data.get("body"), dict):
             latest_text = (data["body"].get("transcription") or "").strip()
 
     if not latest_text:
         return jsonify({"sender": "bot", "text": "I didn’t receive any text to process."}), 400
 
-    # 3) LLM gatekeeper (your LLM Chain that always returns JSON)
+    # Load or create session state
+    session_id, session = get_or_create_session(session_id)
+
+    # 1) Extract attributes from this message
     try:
-        gate = call_mistral_gatekeeper(conversation, latest_text)
+        llm_out = call_mistral_extractor(conversation, latest_text)
     except Exception as e:
         print("LLM error:", e)
         return jsonify({"sender": "bot", "text": "I'm having some trouble connecting."}), 502
 
-    is_feature = bool(gate.get("is_feature"))
-    feat_desc = gate.get("feature_description")
-    reply = gate.get("reply") or "Okay."
+    extracted = llm_out.get("extracted", {})
+    small_talk = llm_out.get("small_talk_reply", "Okay.")
+    merge_extraction(session, extracted)
 
-    # 4) If feature → generate vector (your 'Call NLP Service' step), then respond
-    if is_feature and feat_desc:
+    # 2) Decide if current part just got completed; if yes, optionally vectorize that part
+    before_stage = session["stage_index"]
+    advance_if_ready(session)
+    after_stage = session["stage_index"]
+
+    if after_stage > before_stage:
+        # One or more parts just completed; you can vectorize the last completed part
+        last_completed_index = min(after_stage - 1, len(PART_ORDER) - 1)
+        last_part = PART_ORDER[last_completed_index]
+        # Compose a concise description string from collected fields for that part
+        desc_items = []
+        for k in REQUIRED_FIELDS[last_part]:
+            v = session["collected"][last_part].get(k)
+            if v:
+                desc_items.append(f"{k}: {v}")
+        extra = session["collected"][last_part].get("extra")
+        if extra:
+            desc_items.append(f"extra: {extra}")
+        desc_text = f"{last_part}: " + ", ".join(desc_items) if desc_items else last_part
+
         try:
-            vec = generate_feature_vector(feat_desc)
-            # For now we don’t return the vector to the UI; just mirror n8n behavior
-            print(f"🧬 Feature vector generated (len={len(vec)}).")
+            _ = generate_feature_vector(desc_text)  # Not returned to UI; used to trigger downstream later
+            print(f"🧬 Vectorized [{last_part}] -> {desc_text}")
         except Exception as e:
-            print("Vector gen error:", e)
-            # Even if vectorization fails, still answer the chat
-            pass
+            print("Vectorization error:", e)
 
-    # 5) Respond like your Respond nodes do
+    # 3) If everything collected, give a short final confirmation
+    if session["stage_index"] >= len(PART_ORDER):
+        summary = summarize_collected(session)
+        final_reply = (
+            f"{small_talk} Thanks! I’ve captured all key attributes. "
+            f"Summary → {summary}. You can refine any part (e.g., 'make nose narrower')."
+        )
+        return jsonify({"sender": "bot", "text": final_reply})
+
+    # 4) Otherwise, ask the next best question (keep it simple and clear)
+    prompt = next_missing_prompt(session)
+    # Prepend the small-talk acknowledgement to keep it friendly
+    reply = f"{small_talk} {prompt}"
     return jsonify({"sender": "bot", "text": reply})
 
-
+# =========================
+# Run
+# =========================
 if __name__ == "__main__":
-    # On Render, gunicorn will run this module. For local dev:
+    # For local dev
     app.run(debug=True, port=5000)
