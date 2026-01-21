@@ -94,13 +94,14 @@ const Index = () => {
 
     // 3. CALL REAL BACKEND (Replaces setTimeout simulation)
     try {
+      // It MUST be http://127.0.0.1:5000/mistral-chat
       const response = await fetch('http://127.0.0.1:5000/mistral-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: description,
           sessionId: sessionId,
-          conversation: [] // Pass history here if InputPanel tracks it
+          conversation: [] 
         }),
       });
 

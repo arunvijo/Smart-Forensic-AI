@@ -17,18 +17,11 @@ if current_dir not in sys.path:
 try:
     from models.eye_generator import EyeGenerator
 except ImportError as e:
-    print(f"\n❌ CRITICAL ERROR: Could not import 'EyeGenerator'.")
-    print(f"Python is looking in: {current_dir}")
-    print("Please ensure your file structure is exactly:")
-    print("  backend/")
-    print("  └── src/")
-    print("      ├── nlp.py")
-    print("      └── models/")
-    print("          └── eye_generator.py\n")
     raise e
 
 app = Flask(__name__)
-CORS(app)
+# Allow requests from ANY origin (fixes the browser block)
+CORS(app, resources={r"/*": {"origins": "*"}})
 # ... (Rest of your code remains the same)
 # =========================
 # Config / Constants
