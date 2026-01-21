@@ -6,9 +6,10 @@ interface CanvasPanelProps {
   caseId: string;
   realismScore: number;
   hasSketch: boolean;
+  eyeImage?: string | null; // <--- NEW PROP for the generated eye layer
 }
 
-export const CanvasPanel = ({ caseId, realismScore, hasSketch }: CanvasPanelProps) => {
+export const CanvasPanel = ({ caseId, realismScore, hasSketch, eyeImage }: CanvasPanelProps) => {
   const [zoom, setZoom] = useState(100);
 
   const handleZoomIn = () => setZoom((prev) => Math.min(prev + 10, 200));
@@ -17,6 +18,7 @@ export const CanvasPanel = ({ caseId, realismScore, hasSketch }: CanvasPanelProp
 
   return (
     <div className="panel p-6 flex flex-col gap-4 h-full">
+      {/* Header Section */}
       <div className="flex items-center justify-between">
         <div className="flex gap-6">
           <div>
@@ -33,19 +35,52 @@ export const CanvasPanel = ({ caseId, realismScore, hasSketch }: CanvasPanelProp
         </div>
       </div>
 
+      {/* Main Canvas Area */}
       <div className="flex-1 bg-canvas rounded-lg border-2 border-border flex items-center justify-center relative overflow-hidden">
-        {hasSketch ? (
+        {(hasSketch || eyeImage) ? (
           <div 
             className="transition-transform duration-300"
             style={{ transform: `scale(${zoom / 100})` }}
           >
-            <div className="w-[400px] h-[500px] bg-muted/10 rounded-lg border border-border flex items-center justify-center">
-              <p className="text-muted-foreground text-center px-4">
-                Generated sketch will appear here
-              </p>
+            {/* The Drawing Board */}
+            <div className="w-[400px] h-[500px] bg-white rounded-lg border border-border relative shadow-sm overflow-hidden">
+              
+              {/* 1. Base Face Template (Optional Placeholder) */}
+              {/* You can place a 'face_outline.png' in your public folder to see the head shape */}
+              <img 
+                src="/placeholder_face_outline.png" 
+                alt="Face Outline" 
+                className="absolute top-0 left-0 w-full h-full object-contain opacity-20 pointer-events-none"
+                onError={(e) => (e.currentTarget.style.display = 'none')} 
+              />
+
+              {/* 2. Generated Eye Layer */}
+              {eyeImage ? (
+                <img 
+                  src={eyeImage} 
+                  alt="Generated Eyes" 
+                  className="absolute z-10 mix-blend-multiply"
+                  // These values position the eyes on the standard face template. 
+                  // Adjust top/left/width if your specific template differs.
+                  style={{ 
+                    top: '35%', 
+                    left: '25%', 
+                    width: '50%', 
+                    height: 'auto' 
+                  }} 
+                />
+              ) : (
+                 // Fallback text if hasSketch is true but no image data yet
+                 <div className="w-full h-full flex items-center justify-center">
+                    <p className="text-muted-foreground text-center px-4">
+                      Awaiting feature generation...
+                    </p>
+                 </div>
+              )}
             </div>
           </div>
         ) : (
+          // Empty State
           <div className="text-center px-8">
             <div className="w-24 h-24 mx-auto mb-4 rounded-full bg-muted/20 flex items-center justify-center">
               <svg className="w-12 h-12 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -60,6 +95,7 @@ export const CanvasPanel = ({ caseId, realismScore, hasSketch }: CanvasPanelProp
         )}
       </div>
 
+      {/* Footer Controls */}
       <div className="flex items-center justify-center gap-2">
         <Button variant="secondary" size="icon" onClick={handleZoomOut} disabled={zoom <= 50}>
           <ZoomOut className="h-4 w-4" />
