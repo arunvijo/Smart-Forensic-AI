@@ -13,10 +13,14 @@ const Index = () => {
   const { sessionId } = useParams();
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  
+  // State
   const [hasSketch, setHasSketch] = useState(false);
   const [session, setSession] = useState<any>(null);
-  const [currentVersion, setCurrentVersion] = useState(1);
   const [loading, setLoading] = useState(true);
+  
+  // --- NEW STATE: Store the generated eye image from Backend ---
+  const [eyeImage, setEyeImage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -45,7 +49,7 @@ const Index = () => {
     } else {
       setSession(data);
       
-      // Check if there's a generated face
+      // Check if there's a generated face (Existing logic kept)
       const { data: faceData } = await supabase
         .from('composite_faces')
         .select('*')
@@ -56,16 +60,16 @@ const Index = () => {
 
       if (faceData) {
         setHasSketch(true);
-        setCurrentVersion(faceData.version);
       }
     }
     setLoading(false);
   };
 
+  // --- UPDATED GENERATION LOGIC ---
   const handleGenerate = async (description: string) => {
-    toast.loading("Generating sketch from description...");
+    toast.loading("Analyzing description & generating attributes...");
     
-    // Update session with description and status
+    // 1. Update session in Supabase (Preserve existing flow)
     const { error: updateError } = await supabase
       .from('sessions')
       .update({ 
@@ -79,39 +83,71 @@ const Index = () => {
       return;
     }
 
-    // Create log entry
+    // 2. Create log entry (Preserve existing flow)
     await supabase
       .from('logs')
       .insert([{
         session_id: sessionId,
         action_type: 'create',
-        description: 'Initial sketch generation started'
+        description: `Input: ${description}`
       }]);
 
-    // Simulate sketch generation (in real app, this would call AI service)
-    setTimeout(async () => {
-      // Create composite face entry
-      const { error: faceError } = await supabase
+    // 3. CALL REAL BACKEND (Replaces setTimeout simulation)
+    try {
+      const response = await fetch('http://127.0.0.1:5000/mistral-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: description,
+          sessionId: sessionId,
+          conversation: [] // Pass history here if InputPanel tracks it
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) throw new Error(data.text || "Backend Error");
+
+      toast.dismiss(); // Clear loading toast
+
+      // 4. Handle Generated Image (Eye Module)
+      if (data.generated_image && data.generated_image.category === 'eyes') {
+         console.log("✅ Received Eye Image from Backend");
+         setEyeImage(data.generated_image.image); // Update State
+         setHasSketch(true);
+         toast.success("Eye attributes generated successfully!");
+      } else {
+         toast.info(data.text || "Processed, but no image generated yet.");
+      }
+
+      // 5. Update Status to 'In Progress'
+      await supabase
+        .from('sessions')
+        .update({ status: 'In Progress' })
+        .eq('id', sessionId);
+
+      // (Optional) Save metadata to composite_faces if you want to track versioning
+      // We skip saving the base64 blob to DB for performance, keeping it in State for now.
+      await supabase
         .from('composite_faces')
         .insert([{
           session_id: sessionId,
-          face_image_path: null, // Would be actual image path from AI service
-          version: 1
+          face_image_path: 'generated_in_memory', 
+          version: (session?.version || 0) + 1
         }]);
 
-      if (!faceError) {
-        toast.success("Sketch generated successfully!");
-        setHasSketch(true);
-        
-        // Update session status
-        await supabase
-          .from('sessions')
-          .update({ status: 'In Progress' })
-          .eq('id', sessionId);
+      fetchSession();
 
-        fetchSession();
-      }
-    }, 2000);
+    } catch (error) {
+      console.error("Backend API Error:", error);
+      toast.error("Could not connect to AI Backend (Check if Flask is running)");
+      
+      // Reset status on failure
+      await supabase
+        .from('sessions')
+        .update({ status: 'Error' })
+        .eq('id', sessionId);
+    }
   };
 
   if (authLoading || loading) {
@@ -166,10 +202,12 @@ const Index = () => {
           </div>
           
           <div className="lg:col-span-6">
+            {/* UPDATED CANVAS PANEL WITH EYE IMAGE PROP */}
             <CanvasPanel 
               caseId={sessionId?.slice(0, 13) || ''}
               realismScore={85}
               hasSketch={hasSketch}
+              eyeImage={eyeImage} 
             />
           </div>
           
