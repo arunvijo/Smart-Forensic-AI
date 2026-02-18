@@ -7,8 +7,9 @@ import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useParams } from "react-router-dom";
 
-// External webhook for Audio processing (Optional/Legacy)
-const N8N_WEBHOOK_URL = "https://smart-forensic-ai.onrender.com/mistral-chat";
+// --- CONFIGURATION ---
+// PRODUCTION URL: Updated to your live Hugging Face Backend
+const API_BASE_URL = "https://arunvjo04-smart-forensic-backend.hf.space";
 
 interface Message {
   sender: "user" | "bot";
@@ -83,9 +84,11 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
       formData.append("audio", audioBlob, "recording.wav");
       formData.append("sessionId", sessionId);
 
-      // Note: This relies on the external N8N service. 
-      // If offline, this will fail, but text chat will still work via Local Backend.
-      const response = await fetch(N8N_WEBHOOK_URL, { method: "POST", body: formData });
+      // Pointing to your live backend (Ensure your backend has an audio route or keeps using N8N if separate)
+      // If you are strictly using text-to-image now, this might need your specific audio endpoint.
+      // For now, we assume the backend handles it or we use the generic endpoint.
+      const response = await fetch(`${API_BASE_URL}/mistral-chat`, { method: "POST", body: formData });
+      
       if (!response.ok) throw new Error("Audio processing failed");
       
       const botResponse: Message = await response.json();
