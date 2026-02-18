@@ -9,6 +9,10 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 
+// --- CONFIGURATION ---
+// PRODUCTION URL: Your live Hugging Face Backend
+const API_BASE_URL = "https://arunvjo04-smart-forensic-backend.hf.space";
+
 // Define Message type for chat history
 interface Message {
   sender: 'user' | 'bot';
@@ -127,13 +131,15 @@ const Index = () => {
 
     const loadingToast = toast.loading("AI is sketching features...");
     
+    // Optimistic Update: Set status to Processing
     await supabase
       .from('sessions')
       .update({ raw_input: description, status: 'Processing' })
       .eq('id', sessionId);
 
     try {
-      const response = await fetch('http://127.0.0.1:5000/mistral-chat', {
+      // --- PRODUCTION API CALL ---
+      const response = await fetch(`${API_BASE_URL}/mistral-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -157,6 +163,7 @@ const Index = () => {
       if (data.attributes?.face?.shape) {
         setFaceShape(data.attributes.face.shape);
       } else {
+        // Fallback logic if attributes are missing but keywords exist
         const lowerDesc = description.toLowerCase();
         if (lowerDesc.includes("round")) setFaceShape("round");
         else if (lowerDesc.includes("square")) setFaceShape("square");
