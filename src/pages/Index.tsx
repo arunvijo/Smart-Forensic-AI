@@ -10,24 +10,21 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 
 // --- CONFIGURATION ---
-// Auto-switches: Localhost for development, Hugging Face for production
 const API_BASE_URL = import.meta.env.DEV 
   ? "http://127.0.0.1:7860" 
   : "https://arunvjo04-smart-forensic-backend.hf.space";
 
-// Define Message type for chat history
 interface Message {
   sender: 'user' | 'bot';
   text: string;
 }
 
-// DEFAULT POSITIONS (Includes Hair)
 const INITIAL_REFINEMENTS: Record<ComponentLayer, RefinementState> = {
   face: { x: 0, y: 0, scale: 1, rotate: 0 },
-  hair: { x: 0, y: -40, scale: 1.1, rotate: 0 }, // Hair sits higher and slightly larger
-  eyes: { x: 0, y: -50, scale: 1, rotate: 0 },   // Eyes higher
-  nose: { x: 0, y: 15, scale: 1, rotate: 0 },    // Nose center
-  mouth: { x: 0, y: 70, scale: 1, rotate: 0 }    // Mouth lower
+  hair: { x: 0, y: -40, scale: 1.1, rotate: 0 },
+  eyes: { x: 0, y: -50, scale: 1, rotate: 0 },
+  nose: { x: 0, y: 15, scale: 1, rotate: 0 },
+  mouth: { x: 0, y: 70, scale: 1, rotate: 0 }
 };
 
 const Index = () => {
@@ -35,51 +32,97 @@ const Index = () => {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   
+  // --- STATE PERSISTENCE KEYS ---
+  const IMAGES_STORAGE_KEY = sessionId ? `forensic-images-${sessionId}` : "";
+  const STEP_STORAGE_KEY = sessionId ? `forensic-step-${sessionId}` : "";
+
   // --- SESSION & UI STATE ---
+  // Load initial step from storage to survive refreshes
+  const [step, setStep] = useState<"select_face" | "chat">(() => {
+    if (typeof window !== "undefined" && STEP_STORAGE_KEY) {
+      return (window.localStorage.getItem(STEP_STORAGE_KEY) as any) || "select_face";
+    }
+    return "select_face";
+  });
+  
   const [hasSketch, setHasSketch] = useState(false);
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
 
-  // --- COMPONENT LAYERS ---
-  const [faceShape, setFaceShape] = useState<string>("oval");
-  const [eyeImage, setEyeImage] = useState<string | null>(null);
-  const [mouthImage, setMouthImage] = useState<string | null>(null);
-  const [noseImage, setNoseImage] = useState<string | null>(null);
-  const [hairImage, setHairImage] = useState<string | null>(null); 
+  // --- COMPONENT LAYERS (With Persistence Loader) ---
+  const loadStoredImages = () => {
+    if (typeof window === "undefined" || !IMAGES_STORAGE_KEY) return null;
+    const stored = window.localStorage.getItem(IMAGES_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : null;
+  };
 
-  // --- INDEPENDENT REFINEMENT STATE ---
+  const initialImages = loadStoredImages();
+
+  const [faceShape, setFaceShape] = useState<string>(initialImages?.faceShape || "oval");
+  const [eyeImage, setEyeImage] = useState<string | null>(initialImages?.eyeImage || null);
+  const [mouthImage, setMouthImage] = useState<string | null>(initialImages?.mouthImage || null);
+  const [noseImage, setNoseImage] = useState<string | null>(initialImages?.noseImage || null);
+  const [hairImage, setHairImage] = useState<string | null>(initialImages?.hairImage || null); 
+
   const [activeLayer, setActiveLayer] = useState<ComponentLayer>("eyes");
-  const [allRefinements, setAllRefinements] = useState<Record<ComponentLayer, RefinementState>>(INITIAL_REFINEMENTS);
+  const [allRefinements, setAllRefinements] = useState<Record<ComponentLayer, RefinementState>>(
+    initialImages?.refinements || INITIAL_REFINEMENTS
+  );
 
   const hasFetched = useRef(false);
 
+  // --- PERSISTENCE EFFECT ---
+  // Save images, shapes, and slider positions every time they change
   useEffect(() => {
-    if (!authLoading && !user) {
-      navigate('/auth');
+    if (typeof window !== "undefined" && IMAGES_STORAGE_KEY) {
+      const stateToSave = {
+        faceShape,
+        eyeImage,
+        mouthImage,
+        noseImage,
+        hairImage,
+        refinements: allRefinements
+      };
+      window.localStorage.setItem(IMAGES_STORAGE_KEY, JSON.stringify(stateToSave));
     }
+  }, [faceShape, eyeImage, mouthImage, noseImage, hairImage, allRefinements, IMAGES_STORAGE_KEY]);
+
+  // Save the current step (face selection vs chat)
+  useEffect(() => {
+    if (typeof window !== "undefined" && STEP_STORAGE_KEY) {
+      window.localStorage.setItem(STEP_STORAGE_KEY, step);
+    }
+  }, [step, STEP_STORAGE_KEY]);
+
+
+  useEffect(() => {
+    if (!authLoading && !user) navigate('/auth');
   }, [user, authLoading, navigate]);
 
-  // FIX: Reset state when Session ID changes to prevent "ghost features"
   useEffect(() => {
     if (sessionId && user?.id) {
-      // 1. CLEAR CANVAS & STATE
-      setHasSketch(false);
-      setFaceShape("oval");
-      setEyeImage(null);
-      setNoseImage(null);
-      setMouthImage(null);
-      setHairImage(null);
-      setMessages([]);
-      setAllRefinements(INITIAL_REFINEMENTS);
+      // Only reset state if we don't have stored images for this session
+      const stored = loadStoredImages();
+      if (!stored && !hasFetched.current) {
+        setHasSketch(false);
+        setStep("select_face");
+        setFaceShape("oval");
+        setEyeImage(null);
+        setNoseImage(null);
+        setMouthImage(null);
+        setHairImage(null);
+        setMessages([]);
+        setAllRefinements(INITIAL_REFINEMENTS);
+      } else if (stored) {
+        setHasSketch(true); // If we loaded images, we definitely have a sketch!
+      }
       
-      // 2. Fetch new session
       if (!hasFetched.current) {
         fetchSession();
         hasFetched.current = true;
       }
     }
-    // Reset the ref on unmount or id change so we can re-fetch if needed
     return () => { hasFetched.current = false; };
   }, [sessionId, user?.id]);
 
@@ -109,38 +152,28 @@ const Index = () => {
 
       if (faceData) {
         setHasSketch(true);
+        setStep("chat"); 
       }
     }
     setLoading(false);
   };
 
-  /**
-   * Updates the refinement for the specific active layer
-   */
   const handleRefinementChange = (newState: RefinementState) => {
-    setAllRefinements(prev => ({
-      ...prev,
-      [activeLayer]: newState
-    }));
+    setAllRefinements(prev => ({ ...prev, [activeLayer]: newState }));
   };
 
-  /**
-   * handleGenerate: Orchestrates the request to the AI Backend
-   */
   const handleGenerate = async (description: string) => {
     const newMessages: Message[] = [...messages, { sender: 'user', text: description }];
     setMessages(newMessages);
 
     const loadingToast = toast.loading("AI is sketching features...");
     
-    // Optimistic Update: Set status to Processing
     await supabase
       .from('sessions')
       .update({ raw_input: description, status: 'Processing' })
       .eq('id', sessionId);
 
     try {
-      // --- PRODUCTION API CALL ---
       const response = await fetch(`${API_BASE_URL}/mistral-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -161,22 +194,18 @@ const Index = () => {
         setMessages(prev => [...prev, { sender: 'bot', text: data.text }]);
       }
 
-      // Handle Face Shape
       if (data.attributes?.face?.shape) {
         setFaceShape(data.attributes.face.shape);
       } else {
-        // Fallback logic if attributes are missing but keywords exist
         const lowerDesc = description.toLowerCase();
         if (lowerDesc.includes("round")) setFaceShape("round");
         else if (lowerDesc.includes("square")) setFaceShape("square");
         else if (lowerDesc.includes("oval")) setFaceShape("oval");
       }
 
-      // Handle Feature Images
       if (data.generated_images && data.generated_images.length > 0) {
         data.generated_images.forEach((imgObj: { category: string, image: string }) => {
           const formattedImage = `data:image/png;base64,${imgObj.image}`;
-          
           if (imgObj.category === 'eyes') setEyeImage(formattedImage);
           else if (imgObj.category === 'mouth') setMouthImage(formattedImage);
           else if (imgObj.category === 'nose') setNoseImage(formattedImage);
@@ -193,6 +222,8 @@ const Index = () => {
         .from('sessions')
         .update({ status: 'In Progress' })
         .eq('id', sessionId);
+
+      return data.text; 
 
     } catch (error) {
       console.error("Backend Error:", error);
@@ -245,35 +276,66 @@ const Index = () => {
       </header>
 
       <main className="flex-1 container mx-auto px-6 py-6 overflow-hidden">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
-          
-          <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
-            <InputPanel onGenerate={handleGenerate} initialValue={session?.raw_input || ''} />
+        {step === "select_face" ? (
+          <div className="flex flex-col items-center justify-center h-full max-w-3xl mx-auto space-y-10 mt-10">
+            <div className="text-center space-y-3">
+              <h2 className="text-3xl font-bold tracking-tight">Step 1: Select Base Face Structure</h2>
+              <p className="text-muted-foreground text-lg">Choose the underlying face shape to start the forensic sketch.</p>
+            </div>
+            
+            <div className="flex gap-8 justify-center w-full">
+              {["oval", "round", "square"].map((shape) => (
+                <div 
+                  key={shape}
+                  onClick={() => setFaceShape(shape)}
+                  className={`cursor-pointer border-4 rounded-2xl p-6 transition-all w-48 flex flex-col items-center gap-4 bg-card shadow-sm hover:shadow-md ${
+                    faceShape === shape ? "border-primary bg-primary/5 scale-105" : "border-transparent hover:border-primary/30"
+                  }`}
+                >
+                  <img src={`/faces/${shape}_face.png`} alt={shape} className="w-32 h-32 object-contain opacity-70" />
+                  <p className="text-center font-semibold capitalize text-lg">{shape}</p>
+                </div>
+              ))}
+            </div>
+
+            <Button 
+              size="lg"
+              onClick={() => setStep("chat")}
+              className="mt-8 px-10 py-6 text-lg rounded-xl"
+            >
+              Confirm & Continue
+            </Button>
           </div>
-          
-          <div className="lg:col-span-6 h-full overflow-hidden flex flex-col">
-            <CanvasPanel 
-              caseId={sessionId?.slice(0, 13) || ''}
-              realismScore={85}
-              hasSketch={hasSketch}
-              faceShape={faceShape}
-              eyeImage={eyeImage} 
-              mouthImage={mouthImage}
-              noseImage={noseImage}
-              hairImage={hairImage} 
-              allRefinements={allRefinements}
-            />
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
+            <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
+              <InputPanel onGenerate={handleGenerate} initialValue={session?.raw_input || ''} />
+            </div>
+            
+            <div className="lg:col-span-6 h-full overflow-hidden flex flex-col">
+              <CanvasPanel 
+                caseId={sessionId?.slice(0, 13) || ''}
+                realismScore={85}
+                hasSketch={hasSketch}
+                faceShape={faceShape}
+                eyeImage={eyeImage} 
+                mouthImage={mouthImage}
+                noseImage={noseImage}
+                hairImage={hairImage} 
+                allRefinements={allRefinements}
+              />
+            </div>
+            
+            <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
+              <RefinementPanel 
+                selectedLayer={activeLayer}
+                onLayerChange={setActiveLayer}
+                refinement={allRefinements[activeLayer]} 
+                onRefinementChange={handleRefinementChange} 
+              />
+            </div>
           </div>
-          
-          <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
-            <RefinementPanel 
-              selectedLayer={activeLayer}
-              onLayerChange={setActiveLayer}
-              refinement={allRefinements[activeLayer]} 
-              onRefinementChange={handleRefinementChange} 
-            />
-          </div>
-        </div>
+        )}
       </main>
     </div>
   );

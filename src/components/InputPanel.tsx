@@ -8,7 +8,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useParams } from "react-router-dom";
 
 // --- CONFIGURATION ---
-// Auto-switches: Localhost for development, Hugging Face for production
 const API_BASE_URL = import.meta.env.DEV 
   ? "http://127.0.0.1:7860" 
   : "https://arunvjo04-smart-forensic-backend.hf.space";
@@ -19,8 +18,9 @@ interface Message {
 }
 
 interface InputPanelProps {
-  onGenerate: (description: string) => Promise<void>;
-  initialValue: string; // Used as placeholder/initial state
+  // Changed to expect a returned string from Index.tsx
+  onGenerate: (description: string) => Promise<string | void | any>; 
+  initialValue: string;
 }
 
 export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
@@ -49,17 +49,15 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   // --- HANDLERS ---
-
   const editMessageAt = (index: number) => {
     const msg = messages[index];
     if (!msg || msg.sender !== "user") return;
-    // Trim conversation to BEFORE this user message so a resend replaces it
     setMessages((prev) => prev.slice(0, index));
     setInputValue(msg.text);
   };
 
   const deleteMessageAt = (index: number) => {
-    if (index === 0) return; // Keep greeting
+    if (index === 0) return;
     setMessages((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -86,22 +84,18 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
       formData.append("audio", audioBlob, "recording.wav");
       formData.append("sessionId", sessionId);
 
-      // Pointing to your live backend (Ensure your backend has an audio route or keeps using N8N if separate)
-      // If you are strictly using text-to-image now, this might need your specific audio endpoint.
-      // For now, we assume the backend handles it or we use the generic endpoint.
       const response = await fetch(`${API_BASE_URL}/mistral-chat`, { method: "POST", body: formData });
       
       if (!response.ok) throw new Error("Audio processing failed");
       
       const botResponse: Message = await response.json();
 
-      // Trigger the local generation flow with the transcribed text
       if (botResponse.text) {
         await onGenerate(botResponse.text);
       }
 
       setMessages((prev) => [
-        ...prev.slice(0, -1), // remove "🎤 Sending audio..."
+        ...prev.slice(0, -1),
         { sender: "user", text: `(Audio): ${botResponse.text}` },
         botResponse,
       ]);
@@ -135,15 +129,19 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
     setIsLoading(true);
 
     try {
-      // 2. TRIGGER GENERATION (Calls Index.tsx -> Python Backend)
-      await onGenerate(trimmed);
+      // 2. TRIGGER GENERATION AND CAPTURE THE NLP TEXT
+      const backendReply = await onGenerate(trimmed);
 
-      // 3. Add standard bot confirmation to chat
-      // (The actual visual changes happen on the Canvas)
+      // 3. Inject the dynamic NLP question, fallback only if the backend failed to send text
+      const botResponseText = typeof backendReply === "string" && backendReply.trim() !== ""
+        ? backendReply
+        : "I've processed that. The sketch has been updated.";
+
       const botResponse: Message = { 
         sender: "bot", 
-        text: "I've processed that. The sketch has been updated." 
+        text: botResponseText 
       };
+      
       setMessages((prev) => [...prev, botResponse]);
 
     } catch (error) {
@@ -159,15 +157,12 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
   };
 
   // --- EFFECTS ---
-  
-  // Persist chat history
   useEffect(() => {
     if (typeof window !== "undefined" && sessionId) {
       window.localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages));
     }
   }, [messages, CHAT_HISTORY_KEY, sessionId]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     const viewport = scrollAreaRef.current?.querySelector(
       'div[data-radix-scroll-area-viewport]'
@@ -261,7 +256,6 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
         </div>
       </ScrollArea>
 
-      {/* Input Area */}
       <div className="flex gap-2">
         <Input
           placeholder={initialValue || "Describe facial features..."}
