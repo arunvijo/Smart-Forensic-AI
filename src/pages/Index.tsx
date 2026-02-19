@@ -37,7 +37,6 @@ const Index = () => {
   const STEP_STORAGE_KEY = sessionId ? `forensic-step-${sessionId}` : "";
 
   // --- SESSION & UI STATE ---
-  // Load initial step from storage to survive refreshes
   const [step, setStep] = useState<"select_face" | "chat">(() => {
     if (typeof window !== "undefined" && STEP_STORAGE_KEY) {
       return (window.localStorage.getItem(STEP_STORAGE_KEY) as any) || "select_face";
@@ -59,7 +58,12 @@ const Index = () => {
 
   const initialImages = loadStoredImages();
 
+  // Face Shapes & Global Context
   const [faceShape, setFaceShape] = useState<string>(initialImages?.faceShape || "oval");
+  const [gender, setGender] = useState<string>(initialImages?.gender || "male");
+  const [ageGroup, setAgeGroup] = useState<string>(initialImages?.ageGroup || "young");
+
+  // Images
   const [eyeImage, setEyeImage] = useState<string | null>(initialImages?.eyeImage || null);
   const [mouthImage, setMouthImage] = useState<string | null>(initialImages?.mouthImage || null);
   const [noseImage, setNoseImage] = useState<string | null>(initialImages?.noseImage || null);
@@ -71,13 +75,17 @@ const Index = () => {
   );
 
   const hasFetched = useRef(false);
+  
+  // Track if this is the first message so we can silently inject Age & Gender
+  const isFirstPrompt = useRef(true);
 
   // --- PERSISTENCE EFFECT ---
-  // Save images, shapes, and slider positions every time they change
   useEffect(() => {
     if (typeof window !== "undefined" && IMAGES_STORAGE_KEY) {
       const stateToSave = {
         faceShape,
+        gender,
+        ageGroup,
         eyeImage,
         mouthImage,
         noseImage,
@@ -86,15 +94,13 @@ const Index = () => {
       };
       window.localStorage.setItem(IMAGES_STORAGE_KEY, JSON.stringify(stateToSave));
     }
-  }, [faceShape, eyeImage, mouthImage, noseImage, hairImage, allRefinements, IMAGES_STORAGE_KEY]);
+  }, [faceShape, gender, ageGroup, eyeImage, mouthImage, noseImage, hairImage, allRefinements, IMAGES_STORAGE_KEY]);
 
-  // Save the current step (face selection vs chat)
   useEffect(() => {
     if (typeof window !== "undefined" && STEP_STORAGE_KEY) {
       window.localStorage.setItem(STEP_STORAGE_KEY, step);
     }
   }, [step, STEP_STORAGE_KEY]);
-
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth');
@@ -102,20 +108,23 @@ const Index = () => {
 
   useEffect(() => {
     if (sessionId && user?.id) {
-      // Only reset state if we don't have stored images for this session
       const stored = loadStoredImages();
       if (!stored && !hasFetched.current) {
         setHasSketch(false);
         setStep("select_face");
         setFaceShape("oval");
+        setGender("male");
+        setAgeGroup("young");
         setEyeImage(null);
         setNoseImage(null);
         setMouthImage(null);
         setHairImage(null);
         setMessages([]);
         setAllRefinements(INITIAL_REFINEMENTS);
+        isFirstPrompt.current = true; // Reset prompt tracker on new session
       } else if (stored) {
-        setHasSketch(true); // If we loaded images, we definitely have a sketch!
+        setHasSketch(true);
+        isFirstPrompt.current = false; // Already have sketch, not the first prompt
       }
       
       if (!hasFetched.current) {
@@ -168,9 +177,17 @@ const Index = () => {
 
     const loadingToast = toast.loading("AI is sketching features...");
     
+    // --- SILENT CONTEXT INJECTION ---
+    // Prepend the UI selections so the backend LLM gets the Age and Gender immediately
+    let backendPrompt = description;
+    if (isFirstPrompt.current) {
+      backendPrompt = `Suspect is a ${ageGroup} ${gender}. ` + description;
+      isFirstPrompt.current = false;
+    }
+
     await supabase
       .from('sessions')
-      .update({ raw_input: description, status: 'Processing' })
+      .update({ raw_input: backendPrompt, status: 'Processing' })
       .eq('id', sessionId);
 
     try {
@@ -178,7 +195,7 @@ const Index = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: description,
+          message: backendPrompt, // Send the injected prompt to the AI
           sessionId: sessionId,
           conversation: newMessages
         }),
@@ -277,33 +294,71 @@ const Index = () => {
 
       <main className="flex-1 container mx-auto px-6 py-6 overflow-hidden">
         {step === "select_face" ? (
-          <div className="flex flex-col items-center justify-center h-full max-w-3xl mx-auto space-y-10 mt-10">
-            <div className="text-center space-y-3">
-              <h2 className="text-3xl font-bold tracking-tight">Step 1: Select Base Face Structure</h2>
-              <p className="text-muted-foreground text-lg">Choose the underlying face shape to start the forensic sketch.</p>
+          <div className="flex flex-col items-center justify-center h-full max-w-4xl mx-auto mt-4 space-y-8">
+            <div className="text-center space-y-2">
+              <h2 className="text-3xl font-bold tracking-tight">Step 1: Global Information</h2>
+              <p className="text-muted-foreground text-lg">Select the basic structural traits before refining specific features.</p>
             </div>
             
-            <div className="flex gap-8 justify-center w-full">
+            {/* FACE SHAPE SELECTION */}
+            <div className="flex gap-6 justify-center w-full">
               {["oval", "round", "square"].map((shape) => (
                 <div 
                   key={shape}
                   onClick={() => setFaceShape(shape)}
-                  className={`cursor-pointer border-4 rounded-2xl p-6 transition-all w-48 flex flex-col items-center gap-4 bg-card shadow-sm hover:shadow-md ${
+                  className={`cursor-pointer border-4 rounded-2xl p-4 transition-all w-44 flex flex-col items-center gap-3 bg-card shadow-sm hover:shadow-md ${
                     faceShape === shape ? "border-primary bg-primary/5 scale-105" : "border-transparent hover:border-primary/30"
                   }`}
                 >
-                  <img src={`/faces/${shape}_face.png`} alt={shape} className="w-32 h-32 object-contain opacity-70" />
-                  <p className="text-center font-semibold capitalize text-lg">{shape}</p>
+                  <img src={`/faces/${shape}_face.png`} alt={shape} className="w-28 h-28 object-contain opacity-70" />
+                  <p className="text-center font-semibold capitalize text-base">{shape}</p>
                 </div>
               ))}
+            </div>
+
+            {/* AGE AND GENDER SELECTION */}
+            <div className="grid grid-cols-2 gap-10 w-full max-w-xl mt-4">
+              {/* Gender */}
+              <div className="space-y-3 bg-secondary/30 p-5 rounded-2xl border">
+                <h3 className="text-center font-medium text-muted-foreground">Biological Gender</h3>
+                <div className="flex gap-3 justify-center">
+                  {["male", "female"].map(g => (
+                    <Button 
+                      key={g} 
+                      variant={gender === g ? "default" : "outline"} 
+                      onClick={() => setGender(g)} 
+                      className="capitalize w-full"
+                    >
+                      {g}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Age */}
+              <div className="space-y-3 bg-secondary/30 p-5 rounded-2xl border">
+                <h3 className="text-center font-medium text-muted-foreground">Estimated Age</h3>
+                <div className="grid grid-cols-3 gap-2 justify-center">
+                  {["young", "middle-aged", "old"].map(a => (
+                    <Button 
+                      key={a} 
+                      variant={ageGroup === a ? "default" : "outline"} 
+                      onClick={() => setAgeGroup(a)} 
+                      className="capitalize text-xs px-2"
+                    >
+                      {a === "middle-aged" ? "Middle" : a}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <Button 
               size="lg"
               onClick={() => setStep("chat")}
-              className="mt-8 px-10 py-6 text-lg rounded-xl"
+              className="mt-6 px-12 py-6 text-lg rounded-xl shadow-lg hover:scale-105 transition-transform"
             >
-              Confirm & Continue
+              Confirm Setup & Begin Sketch
             </Button>
           </div>
         ) : (
