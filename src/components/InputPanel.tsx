@@ -8,8 +8,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useParams } from "react-router-dom";
 
 // --- CONFIGURATION ---
-// PRODUCTION URL: Updated to your live Hugging Face Backend
-const API_BASE_URL = "https://arunvjo04-smart-forensic-backend.hf.space";
+// Auto-switches: Localhost for development, Hugging Face for production
+const API_BASE_URL = import.meta.env.DEV 
+  ? "http://127.0.0.1:7860" 
+  : "https://arunvjo04-smart-forensic-backend.hf.space";
 
 interface Message {
   sender: "user" | "bot";

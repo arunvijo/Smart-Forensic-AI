@@ -10,8 +10,10 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 
 // --- CONFIGURATION ---
-// PRODUCTION URL: Your live Hugging Face Backend
-const API_BASE_URL = "https://arunvjo04-smart-forensic-backend.hf.space";
+// Auto-switches: Localhost for development, Hugging Face for production
+const API_BASE_URL = import.meta.env.DEV 
+  ? "http://127.0.0.1:7860" 
+  : "https://arunvjo04-smart-forensic-backend.hf.space";
 
 // Define Message type for chat history
 interface Message {
