@@ -29,7 +29,7 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
 
   const STARTER_BOT: Message = {
     sender: "bot",
-    text: "Hi! Describe the face attributes (age, gender, hair style/color, eye shape, accessories). You can also use the mic.",
+    text: "Let's start with the eyes. How do they look? Mention shape or details like 'bushy', 'bags', or 'narrow'. You can also use the mic.",
   };
 
   // --- STATE ---
