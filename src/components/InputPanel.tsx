@@ -27,10 +27,10 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const CHAT_HISTORY_KEY = sessionId ? `forensic-chat-history-${sessionId}` : "";
 
-  const STARTER_BOT: Message = {
-    sender: "bot",
-    text: "Let's start with the eyes. How do they look? Mention shape or details like 'bushy', 'bags', or 'narrow'. You can also use the mic.",
-  };
+ const STARTER_BOT: Message = {
+  sender: "bot",
+  text: "Got it. Based on that, let's focus on the eyes. How would you describe them? For example, are they almond-shaped, round, deep-set, or perhaps hooded?",
+};
 
   // --- STATE ---
   const [messages, setMessages] = useState<Message[]>(() => {
