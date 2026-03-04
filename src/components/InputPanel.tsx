@@ -76,7 +76,7 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
       return;
     }
     setIsLoading(true);
-    setMessages((prev) => [...prev, { sender: "user", text: "🎤 Sending audio..." }]);
+    setMessages((prev) => [...prev, { sender: "user", text: "🎤 Processing audio..." }]);
     
     try {
       const audioBlob = await fetch(blobUrl).then((res) => res.blob());
@@ -84,24 +84,33 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
       formData.append("audio", audioBlob, "recording.wav");
       formData.append("sessionId", sessionId);
 
-      const response = await fetch(`${API_BASE_URL}/mistral-chat`, { method: "POST", body: formData });
+      // Hit the new /voice endpoint
+      const voiceResponse = await fetch(`${API_BASE_URL}/voice`, { method: "POST", body: formData });
+      if (!voiceResponse.ok) throw new Error("Audio processing failed");
       
-      if (!response.ok) throw new Error("Audio processing failed");
+      const voiceData = await voiceResponse.json();
       
-      const botResponse: Message = await response.json();
+      if (voiceData.transcript) {
+        // Show what the user actually said
+        setMessages((prev) => [
+          ...prev.slice(0, -1),
+          { sender: "user", text: `🎤 ${voiceData.transcript}` },
+        ]);
+        
+        // Pass the transcript to the main generator
+        const backendReply = await onGenerate(voiceData.transcript);
+        
+        const botResponseText = typeof backendReply === "string" && backendReply.trim() !== ""
+          ? backendReply
+          : "I've processed that.";
 
-      if (botResponse.text) {
-        await onGenerate(botResponse.text);
+        setMessages((prev) => [...prev, { sender: "bot", text: botResponseText }]);
+      } else {
+        throw new Error("No transcript returned");
       }
-
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        { sender: "user", text: `(Audio): ${botResponse.text}` },
-        botResponse,
-      ]);
     } catch (error) {
       console.error("Audio Error:", error);
-      toast.error("Audio service unavailable. Please type your description.");
+      toast.error("Audio service unavailable.");
       setMessages((prev) => [
         ...prev.slice(0, -1),
         { sender: "bot", text: "I couldn't process the audio. Please use text input." },
@@ -111,6 +120,7 @@ export const InputPanel = ({ onGenerate, initialValue }: InputPanelProps) => {
     }
   };
 
+  
   const { status, startRecording, stopRecording } = useReactMediaRecorder({
     audio: true,
     onStop: handleSendAudio,

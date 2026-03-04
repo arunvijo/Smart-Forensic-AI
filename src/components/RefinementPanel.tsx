@@ -24,7 +24,6 @@ export interface RefinementState {
   rotate: number;
 }
 
-// Updated type to include hair
 export type ComponentLayer = "face" | "eyes" | "nose" | "mouth" | "hair";
 
 interface RefinementPanelProps {
@@ -36,7 +35,7 @@ interface RefinementPanelProps {
 
 const components: { value: ComponentLayer; label: string }[] = [
   { value: "face", label: "Face Shape" },
-  { value: "hair", label: "Hair" }, // Added Hair to toolkit
+  { value: "hair", label: "Hair" },
   { value: "eyes", label: "Eyes" },
   { value: "nose", label: "Nose" },
   { value: "mouth", label: "Mouth" },
@@ -73,31 +72,88 @@ export const RefinementPanel = ({
     if (!error && data) setLogs(data);
   };
 
+  // --- LOGGING HELPER ---
+  const addLog = async (action: string, desc: string) => {
+    if (!sessionId) return;
+    await supabase.from('logs').insert([{
+      session_id: sessionId,
+      action_type: action,
+      description: desc
+    }]);
+    fetchLogs();
+  };
+
   // --- HANDLERS ---
   const handleChange = (key: keyof RefinementState, val: number) => {
     onRefinementChange({ ...refinement, [key]: val });
   };
 
   const handleReset = () => {
-    // Reset current layer to default neutral state
     onRefinementChange({ x: 0, y: 0, scale: 1, rotate: 0 });
     toast.info(`${selectedLayer} position reset`);
+    addLog('reset', `[${selectedLayer}] Reset to default position`);
   };
 
-  const handleApplyTextRefinement = async () => {
-    if (!refinementText.trim() || !sessionId) return;
+  // --- SMART REFINE (Client-Side NLP) ---
+  const handleApplyTextRefinement = () => {
+    if (!refinementText.trim()) return;
     
-    await supabase.from('logs').insert([{
-      session_id: sessionId,
-      action_type: 'text_refine',
-      description: `[${selectedLayer}] User: "${refinementText}"`
-    }]);
+    const lower = refinementText.toLowerCase();
+    let newRefinement = { ...refinement };
+    let actionTaken = false;
 
-    toast.success("Instruction sent to AI");
+    // Scale
+    if (lower.includes('bigger') || lower.includes('larger') || lower.includes('increase')) {
+      newRefinement.scale = Math.min(2, newRefinement.scale + 0.1);
+      actionTaken = true;
+    }
+    if (lower.includes('smaller') || lower.includes('decrease')) {
+      newRefinement.scale = Math.max(0.5, newRefinement.scale - 0.1);
+      actionTaken = true;
+    }
+
+    // Vertical Y
+    if (lower.includes('up') || lower.includes('higher')) {
+      newRefinement.y = Math.max(-150, newRefinement.y - 15);
+      actionTaken = true;
+    }
+    if (lower.includes('down') || lower.includes('lower')) {
+      newRefinement.y = Math.min(150, newRefinement.y + 15);
+      actionTaken = true;
+    }
+
+    // Horizontal X
+    if (lower.includes('left')) {
+      newRefinement.x = Math.max(-100, newRefinement.x - 15);
+      actionTaken = true;
+    }
+    if (lower.includes('right')) {
+      newRefinement.x = Math.min(100, newRefinement.x + 15);
+      actionTaken = true;
+    }
+
+    // Rotation
+    if (lower.includes('rotate left') || lower.includes('counter')) {
+      newRefinement.rotate = Math.max(-45, newRefinement.rotate - 5);
+      actionTaken = true;
+    }
+    if (lower.includes('rotate right') || lower.includes('clockwise') || lower.match(/rotate/)) {
+      newRefinement.rotate = Math.min(45, newRefinement.rotate + 5);
+      actionTaken = true;
+    }
+
+    if (actionTaken) {
+      onRefinementChange(newRefinement);
+      toast.success(`Applied smart refinement to ${selectedLayer}`);
+      addLog('text_refine', `[${selectedLayer}] Smart Refine: "${refinementText}"`);
+    } else {
+      toast.info("Could not understand direction. Try 'move up', 'make bigger', or 'rotate left'.");
+    }
+
     setRefinementText("");
-    fetchLogs();
   };
 
+  // --- SAVE SESSION ---
   const handleSave = async () => {
     if (!sessionId) return;
     await supabase
@@ -106,6 +162,27 @@ export const RefinementPanel = ({
       .eq('id', sessionId);
     
     toast.success("Session saved successfully");
+    addLog('save', `Session marked as Completed.`);
+  };
+
+  // --- EXPORT IMAGE ---
+  const handleExport = () => {
+    // Target the finalized image from Index.tsx
+    const img = document.querySelector('img[alt="Final Blended Sketch"]') as HTMLImageElement;
+    
+    if (img && img.src) {
+      const a = document.createElement('a');
+      a.href = img.src;
+      a.download = `Forensic_Composite_${sessionId?.slice(0,8)}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      toast.success("Composite exported successfully!");
+      addLog('export', `Exported final composite image.`);
+    } else {
+      toast.error("Please click 'Finalize & Blend Sketch' before exporting.");
+    }
   };
 
   return (
@@ -207,7 +284,7 @@ export const RefinementPanel = ({
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Smart Refine</label>
             <div className="flex gap-2">
               <Input
-                placeholder={`e.g., 'Make ${selectedLayer} wider'`}
+                placeholder={`e.g., 'Make ${selectedLayer} bigger'`}
                 value={refinementText}
                 onChange={(e) => setRefinementText(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleApplyTextRefinement()}
@@ -225,7 +302,7 @@ export const RefinementPanel = ({
               <Save className="mr-2 h-4 w-4" />
               Save Session
             </Button>
-            <Button variant="outline" className="w-full">
+            <Button variant="outline" onClick={handleExport} className="w-full">
               <Download className="mr-2 h-4 w-4" />
               Export Image
             </Button>

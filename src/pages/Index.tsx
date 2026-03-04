@@ -49,6 +49,10 @@ const Index = () => {
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
 
+  // --- BLENDING STATE ---
+  const [finalBlendedImage, setFinalBlendedImage] = useState<string | null>(null);
+  const [isBlending, setIsBlending] = useState(false);
+
   // --- COMPONENT LAYERS (With Persistence Loader) ---
   const loadStoredImages = () => {
     if (typeof window === "undefined" || !IMAGES_STORAGE_KEY) return null;
@@ -142,7 +146,7 @@ const Index = () => {
       .from('sessions')
       .select('*')
       .eq('id', sessionId)
-      .single();
+      .maybeSingle();
 
     if (error) {
       console.error('Error fetching session:', error);
@@ -178,7 +182,6 @@ const Index = () => {
     const loadingToast = toast.loading("AI is sketching features...");
     
     // --- SILENT CONTEXT INJECTION ---
-    // Prepend the UI selections so the backend LLM gets the Age and Gender immediately
     let backendPrompt = description;
     if (isFirstPrompt.current) {
       backendPrompt = `Suspect is a ${ageGroup} ${gender}. ` + description;
@@ -195,7 +198,7 @@ const Index = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: backendPrompt, // Send the injected prompt to the AI
+          message: backendPrompt,
           sessionId: sessionId,
           conversation: newMessages
         }),
@@ -254,6 +257,43 @@ const Index = () => {
     }
   };
 
+  // --- FINALIZE BLENDING LOGIC ---
+  const handleFinalizeSketch = async () => {
+    setIsBlending(true);
+    const loadingToast = toast.loading("Mathematically blending features... Please wait.");
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/finalize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          faceShape: faceShape,
+          features: {
+            eyes: eyeImage,
+            nose: noseImage,
+            mouth: mouthImage,
+            hair: hairImage
+          },
+          refinements: allRefinements
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || data.status === "error") throw new Error(data.message || "Failed to blend");
+
+      setFinalBlendedImage(data.blended_image);
+      toast.dismiss(loadingToast);
+      toast.success("Sketch finalized and blended successfully!");
+      
+    } catch (error) {
+      console.error("Blending Error:", error);
+      toast.dismiss(loadingToast);
+      toast.error("Failed to blend the sketch.");
+    } finally {
+      setIsBlending(false);
+    }
+  };
+
   if (authLoading || (loading && !session)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -266,7 +306,7 @@ const Index = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-screen w-full bg-background overflow-hidden">
       <header className="border-b border-border bg-card/50 backdrop-blur-sm shrink-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -292,32 +332,32 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="flex-1 container mx-auto px-6 py-6 overflow-hidden">
+      <main className="flex-1 min-h-0 container mx-auto px-4 py-4 md:px-6 md:py-6 overflow-hidden">
         {step === "select_face" ? (
-          <div className="flex flex-col items-center justify-center h-full max-w-4xl mx-auto mt-4 space-y-8">
+          <div className="flex flex-col items-center justify-center h-full max-w-4xl mx-auto space-y-6 overflow-y-auto pb-8">
             <div className="text-center space-y-2">
               <h2 className="text-3xl font-bold tracking-tight">Step 1: Global Information</h2>
               <p className="text-muted-foreground text-lg">Select the basic structural traits before refining specific features.</p>
             </div>
             
             {/* FACE SHAPE SELECTION */}
-            <div className="flex gap-6 justify-center w-full">
+            <div className="flex flex-wrap gap-4 justify-center w-full">
               {["oval", "round", "square"].map((shape) => (
                 <div 
                   key={shape}
                   onClick={() => setFaceShape(shape)}
-                  className={`cursor-pointer border-4 rounded-2xl p-4 transition-all w-44 flex flex-col items-center gap-3 bg-card shadow-sm hover:shadow-md ${
+                  className={`cursor-pointer border-4 rounded-2xl p-4 transition-all w-40 flex flex-col items-center gap-3 bg-card shadow-sm hover:shadow-md ${
                     faceShape === shape ? "border-primary bg-primary/5 scale-105" : "border-transparent hover:border-primary/30"
                   }`}
                 >
-                  <img src={`/faces/${shape}_face.png`} alt={shape} className="w-28 h-28 object-contain opacity-70" />
+                  <img src={`/faces/${shape}_face.png`} alt={shape} className="w-24 h-24 object-contain opacity-70" />
                   <p className="text-center font-semibold capitalize text-base">{shape}</p>
                 </div>
               ))}
             </div>
 
             {/* AGE AND GENDER SELECTION */}
-            <div className="grid grid-cols-2 gap-10 w-full max-w-xl mt-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-xl mt-2">
               {/* Gender */}
               <div className="space-y-3 bg-secondary/30 p-5 rounded-2xl border">
                 <h3 className="text-center font-medium text-muted-foreground">Biological Gender</h3>
@@ -362,26 +402,58 @@ const Index = () => {
             </Button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
-            <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full min-h-0">
+            <div className="lg:col-span-3 h-full min-h-0 overflow-hidden flex flex-col">
               <InputPanel onGenerate={handleGenerate} initialValue={session?.raw_input || ''} />
             </div>
             
-            <div className="lg:col-span-6 h-full overflow-hidden flex flex-col">
-              <CanvasPanel 
-                caseId={sessionId?.slice(0, 13) || ''}
-                realismScore={85}
-                hasSketch={hasSketch}
-                faceShape={faceShape}
-                eyeImage={eyeImage} 
-                mouthImage={mouthImage}
-                noseImage={noseImage}
-                hairImage={hairImage} 
-                allRefinements={allRefinements}
-              />
+            <div className="lg:col-span-6 h-full min-h-0 flex flex-col relative">
+              {finalBlendedImage ? (
+                <div className="flex flex-col items-center justify-center h-full space-y-4 bg-card rounded-xl border p-4 shadow-inner overflow-hidden">
+                  <h3 className="text-xl md:text-2xl font-bold text-primary shrink-0">Official Forensic Composite</h3>
+                  <div className="bg-white p-2 rounded-lg shadow-lg border flex-1 min-h-0 flex items-center justify-center w-full">
+                    <img 
+                      src={finalBlendedImage} 
+                      alt="Final Blended Sketch" 
+                      className="max-w-full max-h-full object-contain" 
+                    />
+                  </div>
+                  <Button variant="outline" size="lg" className="shrink-0" onClick={() => setFinalBlendedImage(null)}>
+                    Return to Editing
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col h-full">
+                  <div className="flex-1 min-h-0 pb-2">
+                    <CanvasPanel 
+                      caseId={sessionId?.slice(0, 13) || ''}
+                      realismScore={85}
+                      hasSketch={hasSketch}
+                      faceShape={faceShape}
+                      eyeImage={eyeImage} 
+                      mouthImage={mouthImage}
+                      noseImage={noseImage}
+                      hairImage={hairImage} 
+                      allRefinements={allRefinements}
+                    />
+                  </div>
+                  {hasSketch && (
+                    <div className="shrink-0 pt-2 pb-1">
+                      <Button 
+                        size="lg"
+                        className="w-full shadow-md font-semibold h-12" 
+                        onClick={handleFinalizeSketch}
+                        disabled={isBlending}
+                      >
+                        {isBlending ? "Fusing Sketch..." : "Finalize & Blend Sketch"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             
-            <div className="lg:col-span-3 h-full overflow-hidden flex flex-col">
+            <div className="lg:col-span-3 h-full min-h-0 overflow-hidden flex flex-col">
               <RefinementPanel 
                 selectedLayer={activeLayer}
                 onLayerChange={setActiveLayer}
