@@ -1,17 +1,9 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ComponentLayer, RefinementState } from "./RefinementPanel";
 
 // --- Types ---
-export type ComponentLayer = "face" | "eyes" | "nose" | "mouth" | "hair" | "beard";
-
-export interface RefinementState {
-  x: number;
-  y: number;
-  scale: number;
-  scaleX?: number;
-  scaleY?: number;
-  rotate: number;
-}
+// (Removed local definitions, now imported from RefinementPanel)
 
 interface CanvasPanelProps {
   caseId: string;

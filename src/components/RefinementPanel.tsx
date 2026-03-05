@@ -25,7 +25,7 @@ export interface RefinementState {
   rotate: number;
 }
 
-export type ComponentLayer = "face" | "eyes" | "nose" | "mouth" | "hair";
+export type ComponentLayer = "face" | "eyes" | "nose" | "mouth" | "hair" | "beard";
 
 interface RefinementPanelProps {
   selectedLayer: ComponentLayer;
@@ -37,6 +37,7 @@ interface RefinementPanelProps {
 const components: { value: ComponentLayer; label: string }[] = [
   { value: "face", label: "CRANIAL BASE" },
   { value: "hair", label: "HAIR STRUCTURE" },
+  { value: "beard", label: "FACIAL HAIR" },
   { value: "eyes", label: "OCULAR REGION" },
   { value: "nose", label: "NASAL STRUCTURE" },
   { value: "mouth", label: "ORAL REGION" },

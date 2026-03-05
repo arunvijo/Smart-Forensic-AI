@@ -25,7 +25,8 @@ const INITIAL_REFINEMENTS: Record<ComponentLayer, RefinementState> = {
   hair: { x: 0, y: -40, scale: 1.1, rotate: 0 },
   eyes: { x: 0, y: -50, scale: 1, rotate: 0 },
   nose: { x: 0, y: 15, scale: 1, rotate: 0 },
-  mouth: { x: 0, y: 70, scale: 1, rotate: 0 }
+  mouth: { x: 0, y: 70, scale: 1, rotate: 0 },
+  beard: { x: 0, y: 100, scale: 1, rotate: 0 }
 };
 
 type WorkspacePhase = "setup" | "editing" | "blended" | "enhanced" | "validated";
@@ -137,15 +138,31 @@ const Index = () => {
   };
 
   useEffect(() => {
-    if (!loading && typeof window !== "undefined" && IMAGES_STORAGE_KEY) {
-      const stateToSave = {
-        faceShape, suspectName, gender, ageGroup,
-        eyeImage, mouthImage, noseImage, hairImage, beardImage,
-        refinements: allRefinements, messages, finalBlendedImage, phase
-      };
-      window.localStorage.setItem(IMAGES_STORAGE_KEY, JSON.stringify(stateToSave));
+    // Only save if we aren't loading and have a valid key
+    if (typeof window !== "undefined" && IMAGES_STORAGE_KEY && !loading) {
+      try {
+        const stateToSave = {
+          faceShape, suspectName, gender, ageGroup,
+          // Optional: You could save only the refinements to save space, 
+          // as images should ideally come from Supabase.
+          eyeImage, mouthImage, noseImage, hairImage, beardImage, 
+          refinements: allRefinements, 
+          finalBlendedImage, 
+          phase
+        };
+        
+        window.localStorage.setItem(IMAGES_STORAGE_KEY, JSON.stringify(stateToSave));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+          console.warn("⚠️ LocalStorage quota exceeded. Sketch state will rely on Supabase database only.");
+          // Clear old keys to try and make room if necessary
+          // window.localStorage.clear(); 
+        } else {
+          console.error("Failed to save to localStorage:", error);
+        }
+      }
     }
-  }, [faceShape, suspectName, gender, ageGroup, eyeImage, mouthImage, noseImage, hairImage, beardImage, allRefinements, messages, finalBlendedImage, phase, IMAGES_STORAGE_KEY, loading]);
+  }, [faceShape, suspectName, gender, ageGroup, eyeImage, mouthImage, noseImage, hairImage, beardImage, allRefinements, finalBlendedImage, phase, IMAGES_STORAGE_KEY, loading]);
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth');
