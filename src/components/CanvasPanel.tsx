@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
 // --- Types ---
-export type ComponentLayer = "face" | "eyes" | "nose" | "mouth" | "hair";
+export type ComponentLayer = "face" | "eyes" | "nose" | "mouth" | "hair" | "beard";
 
 export interface RefinementState {
   x: number;
@@ -22,6 +22,7 @@ interface CanvasPanelProps {
   noseImage: string | null;  // Layer 2: Nose
   mouthImage: string | null; // Layer 3: Mouth
   hairImage: string | null;  // Layer 4: Hair
+  beardImage?: string | null; // Layer 5: Beard (Optional for backward compatibility)
   allRefinements: Record<ComponentLayer, RefinementState>;
 }
 
@@ -34,6 +35,7 @@ export const CanvasPanel = ({
   noseImage,
   mouthImage,
   hairImage,
+  beardImage,
   allRefinements
 }: CanvasPanelProps) => {
   const [zoom, setZoom] = useState(100);
@@ -45,17 +47,20 @@ export const CanvasPanel = ({
 
   // Helper to generate precise CSS transform for each specific layer
   const getLayerStyle = (layer: ComponentLayer) => {
+    // Fallback if a refinement doesn't exist yet for a new layer like beard
     const r = allRefinements[layer] || { x: 0, y: 0, scale: 1, rotate: 0 };
     
     const sx = r.scaleX ?? r.scale ?? 1;
     const sy = r.scaleY ?? r.scale ?? 1;
     return {
       transform: `translate(${r.x}px, ${r.y}px) scale(${sx}, ${sy}) rotate(${r.rotate}deg)`,
-      // Z-Index Protocol: Face(10) -> Hair(15) -> Eyes(20) -> Nose(25) -> Mouth(30)
+      transformOrigin: "center center", // CRITICAL: Forces CSS math to exactly match OpenCV matrix math
+      // Z-Index Protocol (Matches OpenCV blend order): Face(10) -> Beard(15) -> Eyes(20) -> Nose(25) -> Mouth(30) -> Hair(35)
       zIndex: layer === 'face' ? 10 :
-              layer === 'hair' ? 15 :
+              layer === 'beard' ? 15 :
               layer === 'eyes' ? 20 : 
-              layer === 'nose' ? 25 : 30
+              layer === 'nose' ? 25 : 
+              layer === 'mouth' ? 30 : 35
     };
   };
 
@@ -119,13 +124,13 @@ export const CanvasPanel = ({
                 )}
             </div>
 
-            {/* LAYER 1: HAIR STRUCTURE (Z: 15) */}
-            {hairImage && (
+            {/* LAYER 1: FACIAL HAIR / BEARD (Z: 15) */}
+            {beardImage && (
               <img 
-                src={hairImage} 
-                alt="Generated Hair" 
+                src={beardImage} 
+                alt="Generated Beard" 
                 className="absolute top-0 left-0 w-full h-full object-cover mix-blend-multiply transition-transform duration-200"
-                style={getLayerStyle('hair')}
+                style={getLayerStyle('beard')}
               />
             )}
 
@@ -159,8 +164,18 @@ export const CanvasPanel = ({
               />
             )}
 
+            {/* LAYER 5: HAIR STRUCTURE (Z: 35) */}
+            {hairImage && (
+              <img 
+                src={hairImage} 
+                alt="Generated Hair" 
+                className="absolute top-0 left-0 w-full h-full object-cover mix-blend-multiply transition-transform duration-200"
+                style={getLayerStyle('hair')}
+              />
+            )}
+
             {/* NULL STATE / AWAITING DATA */}
-            {(!eyeImage && !mouthImage && !noseImage && !hairImage && !hasSketch) && (
+            {(!eyeImage && !mouthImage && !noseImage && !hairImage && !beardImage && !hasSketch) && (
                 <div className="absolute inset-0 flex items-center justify-center z-0">
                   <p className="text-muted-foreground text-[10px] font-mono uppercase tracking-widest bg-black/5 px-4 py-2 rounded-sm border border-black/10">
                     AWAITING NEURAL GENERATION...
