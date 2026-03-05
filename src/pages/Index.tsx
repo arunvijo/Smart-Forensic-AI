@@ -63,7 +63,8 @@ const Index = () => {
   const [eyeImage, setEyeImage] = useState<string | null>(null);
   const [mouthImage, setMouthImage] = useState<string | null>(null);
   const [noseImage, setNoseImage] = useState<string | null>(null);
-  const [hairImage, setHairImage] = useState<string | null>(null); 
+  const [hairImage, setHairImage] = useState<string | null>(null);
+  const [beardImage, setBeardImage] = useState<string | null>(null);
 
   const [activeLayer, setActiveLayer] = useState<ComponentLayer>("eyes");
   const [allRefinements, setAllRefinements] = useState<Record<ComponentLayer, RefinementState>>(INITIAL_REFINEMENTS);
@@ -136,15 +137,15 @@ const Index = () => {
   };
 
   useEffect(() => {
-    if (typeof window !== "undefined" && IMAGES_STORAGE_KEY) {
+    if (!loading && typeof window !== "undefined" && IMAGES_STORAGE_KEY) {
       const stateToSave = {
         faceShape, suspectName, gender, ageGroup,
-        eyeImage, mouthImage, noseImage, hairImage,
+        eyeImage, mouthImage, noseImage, hairImage, beardImage,
         refinements: allRefinements, messages, finalBlendedImage, phase
       };
       window.localStorage.setItem(IMAGES_STORAGE_KEY, JSON.stringify(stateToSave));
     }
-  }, [faceShape, suspectName, gender, ageGroup, eyeImage, mouthImage, noseImage, hairImage, allRefinements, messages, finalBlendedImage, phase, IMAGES_STORAGE_KEY]);
+  }, [faceShape, suspectName, gender, ageGroup, eyeImage, mouthImage, noseImage, hairImage, beardImage, allRefinements, messages, finalBlendedImage, phase, IMAGES_STORAGE_KEY, loading]);
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth');
@@ -193,6 +194,7 @@ const Index = () => {
       setNoseImage(faceData.nose_image || null);
       setMouthImage(faceData.mouth_image || null);
       setHairImage(faceData.hair_image || null);
+      setBeardImage(faceData.beard_image || null);
       if (faceData.refinements) setAllRefinements(faceData.refinements);
       
       const hasAnyFeature = !!(faceData.eye_image || faceData.nose_image || faceData.mouth_image || faceData.hair_image);
@@ -221,11 +223,23 @@ const Index = () => {
         setNoseImage(parsed.noseImage);
         setMouthImage(parsed.mouthImage);
         setHairImage(parsed.hairImage);
+        setBeardImage(parsed.beardImage || null);
         setAllRefinements(parsed.refinements || INITIAL_REFINEMENTS);
         setFinalBlendedImage(parsed.finalBlendedImage);
-        setPhase(parsed.phase || "editing");
-        setHasSketch(true);
-        isFirstPrompt.current = false;
+        
+        const hasAnyFeature = !!(parsed.eyeImage || parsed.noseImage || parsed.mouthImage || parsed.hairImage);
+        if (parsed.phase) {
+          setPhase(parsed.phase);
+        } else if (parsed.finalBlendedImage) {
+          setPhase("blended");
+        } else if (hasAnyFeature) {
+          setPhase("editing");
+        } else {
+          setPhase("setup");
+        }
+        
+        setHasSketch(hasAnyFeature);
+        isFirstPrompt.current = !hasAnyFeature;
       }
     }
     setLoading(false);
