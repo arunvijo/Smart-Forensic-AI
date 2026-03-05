@@ -43,7 +43,7 @@ const Dashboard = () => {
       .eq('id', user?.id)
       .single();
 
-    if (!error) setProfile(data);
+    if (!error && data) setProfile(data);
   };
 
   const fetchSessions = async () => {
@@ -56,6 +56,7 @@ const Dashboard = () => {
 
     if (error) {
       toast.error('Failed to load forensic records');
+      setSessions([]);
     } else {
       setSessions(data || []);
     }
@@ -71,17 +72,17 @@ const Dashboard = () => {
 
     if (error) {
       toast.error('Initialization failed');
-    } else {
+    } else if (data) {
       toast.success('New forensic sequence initiated');
       navigate(`/workspace/${data.id}`);
     }
   };
 
-  // --- NEW: Delete Handler ---
   const handleDeleteSession = async (e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation(); // Prevent navigating to the workspace
+    e.preventDefault();
+    e.stopPropagation(); 
     
-    if (!confirm("Are you sure you want to purge this case record? This action cannot be undone.")) return;
+    if (!window.confirm("Are you sure you want to purge this case record? This action cannot be undone.")) return;
 
     const { error } = await supabase
       .from('sessions')
@@ -89,11 +90,10 @@ const Dashboard = () => {
       .eq('id', sessionId);
 
     if (error) {
-      toast.error("Failed to delete session");
+      toast.error("Failed to delete case record");
       console.error(error);
     } else {
       toast.success("Case record purged successfully");
-      // Update UI immediately without refetching
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
     }
   };
@@ -114,7 +114,7 @@ const Dashboard = () => {
 
   if (authLoading || loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center relative">
+      <div className="min-h-screen bg-background font-sans flex items-center justify-center relative">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,#3b82f610_0%,transparent_70%)]" />
         <div className="text-center z-10">
           <div className="w-16 h-16 mx-auto mb-6 rounded-2xl bg-primary/10 border border-primary/20 animate-pulse flex items-center justify-center">
@@ -127,7 +127,7 @@ const Dashboard = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground selection:bg-primary/30">
+    <div className="min-h-screen bg-background text-foreground font-sans selection:bg-primary/30">
       {/* 1. Command Header */}
       <header className="border-b border-white/5 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
@@ -140,13 +140,19 @@ const Dashboard = () => {
                 <h1 className="text-lg font-bold tracking-tight">Forensic Command Center</h1>
                 <div className="flex items-center gap-2">
                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-tighter">Active Agent: {profile?.full_name || 'Authorized User'}</p>
+                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-tighter">
+                     Active Agent: {profile?.full_name || 'Authorized User'}
+                   </p>
                 </div>
               </div>
             </div>
-            <Button variant="ghost" onClick={handleSignOut} className="hover:bg-destructive/10 hover:text-destructive transition-all rounded-xl border border-transparent hover:border-destructive/20">
+            <Button 
+              variant="ghost" 
+              onClick={handleSignOut} 
+              className="hover:bg-destructive/10 hover:text-destructive transition-all rounded-xl border border-transparent hover:border-destructive/20"
+            >
               <LogOut className="h-4 w-4 mr-2" />
-              Termination Session
+              Terminate Session
             </Button>
           </div>
         </div>
@@ -176,7 +182,7 @@ const Dashboard = () => {
                 <p className="text-muted-foreground max-w-sm mx-auto mb-8">
                   No forensic investigations have been initiated. Start your first session to begin neural reconstruction.
                 </p>
-                <Button onClick={handleCreateSession} size="lg" className="rounded-2xl shadow-xl shadow-primary/20">
+                <Button onClick={handleCreateSession} size="lg" className="rounded-2xl shadow-xl shadow-primary/20 font-bold tracking-wide">
                    <Plus className="mr-2 h-5 w-5" /> Initialize First Case
                 </Button>
               </div>
@@ -202,18 +208,21 @@ const Dashboard = () => {
                           "{session.raw_input || 'Awaiting witness description...'}"
                         </p>
                         <div className="flex items-center gap-4 text-[10px] text-muted-foreground font-semibold uppercase tracking-widest">
-                          <span className="flex items-center gap-1.5"><Clock className="w-3 h-3" /> {format(new Date(session.started_at), 'MMM d, yyyy')}</span>
+                          <span className="flex items-center gap-1.5">
+                            <Clock className="w-3 h-3" /> 
+                            {format(new Date(session.started_at), 'MMM d, yyyy')}
+                          </span>
                           <span className="w-1 h-1 rounded-full bg-white/20" />
                           <span>Version 1.0</span>
                         </div>
                       </div>
                       
-                      {/* Actions: Delete Button and Chevron */}
+                      {/* Actions */}
                       <div className="flex items-center gap-2">
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 z-20"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 z-20 transition-colors"
                           onClick={(e) => handleDeleteSession(e, session.id)}
                           title="Delete Case"
                         >
@@ -223,7 +232,7 @@ const Dashboard = () => {
                       </div>
                     </div>
                     {/* Hover Glow */}
-                    <div className="absolute -right-20 -top-20 w-40 h-40 bg-primary/5 rounded-full blur-3xl group-hover:bg-primary/10 transition-colors" />
+                    <div className="absolute -right-20 -top-20 w-40 h-40 bg-primary/5 rounded-full blur-3xl group-hover:bg-primary/10 transition-colors pointer-events-none" />
                   </Card>
                 ))}
               </div>
@@ -241,7 +250,11 @@ const Dashboard = () => {
                     Deploy a new neural reconstruction instance to process fresh witness testimony.
                   </p>
                 </div>
-                <Button onClick={handleCreateSession} className="w-full py-6 rounded-2xl shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all text-sm font-bold tracking-widest" size="lg">
+                <Button 
+                  onClick={handleCreateSession} 
+                  className="w-full py-6 rounded-2xl shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all text-sm font-bold tracking-widest" 
+                  size="lg"
+                >
                   <Plus className="mr-2 h-5 w-5" /> INITIATE SEQUENCE
                 </Button>
                 
@@ -259,13 +272,13 @@ const Dashboard = () => {
             
             {/* 4. Stats Summary */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-card/40 p-5 rounded-2xl border border-white/5 text-center">
+              <div className="bg-card/40 p-5 rounded-2xl border border-white/5 text-center transition-colors hover:bg-card/60">
                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-tighter mb-1">Total Cases</p>
-                <p className="text-2xl font-black text-primary">{sessions.length}</p>
+                <p className="text-2xl font-black text-primary font-mono">{sessions.length}</p>
               </div>
-              <div className="bg-card/40 p-5 rounded-2xl border border-white/5 text-center">
+              <div className="bg-card/40 p-5 rounded-2xl border border-white/5 text-center transition-colors hover:bg-card/60">
                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-tighter mb-1">Success Rate</p>
-                <p className="text-2xl font-black text-emerald-500">98%</p>
+                <p className="text-2xl font-black text-emerald-500 font-mono">98%</p>
               </div>
             </div>
           </div>
